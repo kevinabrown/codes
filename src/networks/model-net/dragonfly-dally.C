@@ -2389,6 +2389,9 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
         }
     }
 
+    if(tw_now(lp) > max_qos_monitor)
+        return;
+
     if (s->workloads_finished_flag == 0) {
         terminal_dally_message * m; 
         tw_stime bw_ts = bw_reset_window + gen_noise(lp, &msg->num_rngs);
@@ -2474,6 +2477,9 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
         s->busy_time_sample[i] = 0;
         s->ross_rsample.busy_time[i] = 0;
     }
+
+    if(tw_now(lp) > max_qos_monitor)
+        return;
 
     if (s->workloads_finished_flag == 0) {
         tw_stime bw_ts = bw_reset_window + gen_noise(lp, &msg->num_rngs);
@@ -3535,7 +3541,6 @@ static void packet_generate(terminal_state * s, tw_bf * bf, terminal_dally_messa
         injection_ts = bytes_to_ns(msg->packet_size, s->params->cn_bandwidth);
     }
     nic_ts = injection_ts;
-
 
 
     if (s->params->num_injection_queues > 1) {
