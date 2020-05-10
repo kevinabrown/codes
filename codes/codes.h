@@ -20,6 +20,9 @@ extern "C" {
 
 extern MPI_Comm MPI_COMM_CODES;
 
+#undef tw_rand_unif
+#define tw_rand_unif(G) 0.0f
+
 // for printf conversions: shorthand for cast to long long unsigned format (llu)
 #define LLU(x) ((unsigned long long)(x))
 #define LLD(x) ((long long)(x))
@@ -68,8 +71,8 @@ static inline tw_event * tw_event_new_bounded(
  * communication between daemons and hardware devices.  Measured in
  * nanoseconds.
  */
-#define CODES_MIN_LATENCY 0.5
-#define CODES_MAX_LATENCY 1.0
+#define CODES_MIN_LATENCY 0.0
+#define CODES_MAX_LATENCY 0.0
 #define CODES_LATENCY_RANGE \
     (CODES_MAX_LATENCY-CODES_MIN_LATENCY)
 static inline tw_stime codes_local_latency(tw_lp *lp)
@@ -88,7 +91,7 @@ static inline tw_stime codes_local_latency(tw_lp *lp)
                 "increase CODES_MIN_LATENCY/CODES_MAX_LATENCY. "
                 "Now:%0.5le, lookahead:%0.5le, return:%0.5le\n",
                 tw_now(lp), g_tw_lookahead, tmp);
-
+    tmp = 0.0;
     return(tmp);
 }
 
