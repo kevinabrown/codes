@@ -1689,6 +1689,16 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
     else
         p->qos_bandwidths[0] = 100;
 
+    rc = configuration_get_value_double(&config, "PARAMS", "max_qos_monitor", anno, &max_qos_monitor);
+    if(rc) {
+        if(!myRank)
+            fprintf(stderr, "Setting max_qos_monitor to %lf\n", max_qos_monitor);
+	}
+    rc = configuration_get_value_int(&config, "PARAMS", "bw_reset_window", anno, &bw_reset_window); // KBEDIT
+    if(rc) {
+        if(!myRank)
+            fprintf(stderr, "Setting bw_reset_window to %d\n", bw_reset_window);
+	}
     rc = configuration_get_value_int(&config, "PARAMS", "adaptive_threshold", anno, &p->adaptive_threshold);
     if (rc) {
         if(!myRank)
@@ -2276,7 +2286,7 @@ int get_vcg_from_category(terminal_dally_message * msg)
    else if(strcmp(msg->category, "medium") == 0)
        return Q_MEDIUM;
    else
-       tw_error(TW_LOC, "\n priority needs to be specified with qos_levels>1 %d", msg->category);
+       tw_error(TW_LOC, "\n priority needs to be specified with qos_levels>1 (catetory: %s)", msg->category);
 }
 
 static int get_term_bandwidth_consumption(terminal_state * s, int rail_id, int qos_lvl)
