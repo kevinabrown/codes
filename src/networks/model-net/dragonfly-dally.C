@@ -3015,7 +3015,7 @@ static tw_stime dragonfly_dally_packet_event(
     msg->sender_lp=req->src_lp;
     msg->sender_mn_lp = sender->gid;
     msg->packet_size = packet_size;
-    msg->travel_start_time = tw_now(sender);
+    //msg->travel_start_time = tw_now(sender);
     msg->remote_event_size_bytes = 0;
     msg->local_event_size_bytes = 0;
     msg->type = T_GENERATE;
@@ -3415,6 +3415,7 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
         memcpy(remote_event, cur_entry->event_data, m->remote_event_size_bytes);
     }
 
+    m->travel_start_time = s->terminal_available_time - injection_ts;
     m->type = R_ARRIVE;
     m->src_terminal_id = lp->gid;
     m->vc_index = vcg;
