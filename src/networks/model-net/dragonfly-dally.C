@@ -4329,6 +4329,7 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
         memcpy(remote_event, cur_entry->event_data, m->remote_event_size_bytes);
     }
 
+    m->travel_start_time = s->terminal_available_time - injection_ts;
     m->type = R_ARRIVE;
     m->src_terminal_id = lp->gid;
     m->dfdally_src_terminal_id = s->terminal_id;
