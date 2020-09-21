@@ -3344,6 +3344,7 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
         {
             //TODO: can we allow for a 2 item line but with defaults for the last two?
             ref = fscanf(name_file, "%d %s %d %f", &num_traces_of_job[i], file_name_of_job[i], &qos_level_of_job[i], &mean_interval_of_job[i]);
+            //KEV ref = fscanf(name_file, "%d %s %d", &num_traces_of_job[i], file_name_of_job[i], &qos_level_of_job[i]);
             
             if(ref != EOF && strncmp(file_name_of_job[i], "synthetic", 9) == 0)
             {
