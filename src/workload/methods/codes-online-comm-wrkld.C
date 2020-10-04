@@ -867,6 +867,10 @@ string get_default_path(online_comm_params * o_params)
     {
         path.append("/workload1.json");
     }
+    else if(strcmp(o_params->workload_name, "nekbone1") == 0)
+    {
+        path.append("/workload1.json"); 
+    }
     else if(strcmp(o_params->workload_name, "nearest_neighbor") == 0)
     {
         path.append("/skeleton.json"); 
