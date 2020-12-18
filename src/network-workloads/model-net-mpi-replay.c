@@ -981,6 +981,13 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
         default:
             tw_error(TW_LOC, "Undefined traffic pattern");
     }   
+    /* Disable injection during the period when there should be no traffic */
+	if(tw_now(lp) < job_timer2[s->app_id] && job_timer1[s->app_id] > 0){
+		if(tw_now(lp) > job_timer1[s->app_id]){
+			length = 0;
+		}
+	}
+
     /* Record length for reverse handler*/
     m->rc.saved_syn_length = length;
 
@@ -2644,8 +2651,9 @@ void nw_test_event_handler(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp)
         break;
 
         case CLI_BCKGND_CHANGE:
-		mean_interval_of_job[s->app_id] = m->fwd.msg_send_time;
-		printf("======== CHANGE [now: %lf] App:%d | Interval: %f\n", tw_now(lp), s->app_id, mean_interval_of_job[s->app_id]);
+            m->rc.saved_send_time = mean_interval_of_job[s->app_id];
+            mean_interval_of_job[s->app_id] = m->fwd.msg_send_time;
+		    printf("======== CHANGE [now: %lf] App:%d | Interval: %f\n", tw_now(lp), s->app_id, mean_interval_of_job[s->app_id]);
 	break;
 
         case CLI_BCKGND_ARRIVE:
@@ -3085,7 +3093,7 @@ void nw_test_event_handler_rc(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * l
             break;
 
         case CLI_BCKGND_CHANGE:
-	    mean_interval_of_job[s->app_id] = m->rc.saved_send_time;
+            mean_interval_of_job[s->app_id] = m->rc.saved_send_time;
 	    break;
 
         case CLI_BCKGND_ARRIVE:
