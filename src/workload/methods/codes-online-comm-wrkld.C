@@ -24,6 +24,7 @@
 #include "nekbone_swm_user_code.h"
 #include "nearest_neighbor_swm_user_code.h"
 #include "all_to_one_swm_user_code.h"
+#include "hacc_swm_user_code.h" //EMR
 
 #define ALLREDUCE_SHORT_MSG_SIZE 2048
 
@@ -781,6 +782,11 @@ static void workload_caller(void * arg)
        AllToOneSWMUserCode * incast_swm = static_cast<AllToOneSWMUserCode*>(sctx->swm_obj);
        incast_swm->call();
     }
+    else if(strcmp(sctx->workload_name, "hacc") == 0) 
+    {
+        HACCSWMUserCode * hacc_swm = static_cast<HACCSWMUserCode*>(sctx->swm_obj);
+        hacc_swm->call();
+    }
 }
 static int comm_online_workload_load(const char * params, int app_id, int rank)
 {
@@ -830,6 +836,10 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     {
         path.append("/incast2.json"); 
     }
+    else if(strcmp(o_params->workload_name, "hacc") == 0)
+    {
+        path.append("/hacc_workload.json"); 
+    }
     else
         tw_error(TW_LOC, "\n Undefined workload type %s ", o_params->workload_name);
 
@@ -863,6 +873,11 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     {
         AllToOneSWMUserCode * incast_swm = new AllToOneSWMUserCode(root, generic_ptrs);
         my_ctx->sctx.swm_obj = (void*)incast_swm;
+    }
+    else if(strcmp(o_params->workload_name, "hacc") == 0)
+    {
+        HACCSWMUserCode * hacc_swm = new HACCSWMUserCode(root, generic_ptrs);
+        my_ctx->sctx.swm_obj = (void*)hacc_swm;
     }
 
     if(global_prod_thread == NULL)
