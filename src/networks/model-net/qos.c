@@ -132,8 +132,6 @@ void qos_update_accumulated_tokens(const qos_params *qp, qos_state *q, int qos_l
         #endif
         double bandwidth, int chunk_size, tw_stime now)
 {
-
-    //printf("================================== UPDATING =======================================\n");
     if (q->min_token_count[qos_lvl] == qp->qos_bucket_max && q->max_token_count[qos_lvl] == qp->qos_bucket_max)
     {
         q->max_update_time[qos_lvl] = now;
@@ -153,7 +151,7 @@ void qos_update_accumulated_tokens(const qos_params *qp, qos_state *q, int qos_l
     /* Calculations based on the cost of sending 1 flit = 1 token */
     double min_accum_tokens = (qos_min_bytes_per_ns / chunk_size) * min_elapsed_time;
     double max_accum_tokens = (qos_max_bytes_per_ns / chunk_size) * max_elapsed_time;
-    //printf("================================== VALSSSS =======================================hw: %f - min: %f - max: %f\n",bandwidth, min_accum_tokens, max_accum_tokens);
+    //printf("================================== VALSS =======================================hw: %f - min: %f - max: %f\n",bandwidth, min_accum_tokens, max_accum_tokens);
 
     if(min_accum_tokens >= 1.0f)
     {
@@ -208,7 +206,6 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
     int base_limit = 0;
     int num_qos_levels = qp->num_qos_levels;
 
-    //printf("================================== GETTING ========================================\n");
     /* First make sure the bandwidth consumptions are up to date. */
     if(BW_MONITOR == 1 && num_qos_levels > 1)
     {
@@ -231,7 +228,11 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
             base_limit = i * vcs_per_qos;
             for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
             {
-                //if(pending_msgs[k] != NULL && vc_occupancy[k] + chunk_size <= vc_size)
+                //  Ideally, we should not try to send from a VC when the remote VC is full, so we should check if we have credits.
+                //  However, the local vc_occupancy is not a good proxy for the remote VC's occupancy in some cases. 
+                //  For example, an incast to the local VC would cause the local VC to fill faster than the remote VC
+                //  TODO: track credits more effectively  (Kevin Brown)
+                //      if(pending_msgs[k] != NULL && vc_occupancy[k] + chunk_size <= vc_size)  
                 if(pending_msgs[k] != NULL)
                 {
                     /* Check if this is a yellow class: it is not green and within its peak rate. */
@@ -292,9 +293,6 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
          * tokens for lower priority classs don't have to be updated if a
          * higher priorty class is sending. */
         
-        // This line may be needed so that we don't try to send from a class that doesn't have credit downstream
-            ///if(s->terminal_msgs[k] != NULL && s->vc_occupancy[k] + s->params->chunk_size <= s->params->cn_vc_size)
-            
         // Return the first VC with traffic from the green class
         if(first_green >= 0)
         {
@@ -315,7 +313,6 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
             assert(q->min_token_count[i] >= 0.0);
             assert(q->max_token_count[i] >= 0.0);
 
-    //printf("================================== GOTTEN ========================================\n");
             return first_green;
         }
         else if(first_yellow >= 0)
@@ -332,7 +329,6 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
             #endif
 
             assert(q->max_token_count[i] >= 0.0);
-    //printf("================================== GOTTEN ========================================\n");
 
             return first_yellow;
         }
@@ -351,7 +347,11 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
             printf("[%.0lf] qos_send_excess %c:%d port:%d class:%d vc:%d (checked)\n", tw_now(lp), 
                     node_type, node_id, port, next_rr_vcg, k);
             #endif
-            //if(pending_msgs[k] != NULL && vc_occupancy[k] + chunk_size <= vc_size)
+            //  Ideally, we should not try to send from a VC when the remote VC is full, so we should check if we have credits.
+            //  However, the local vc_occupancy is not a good proxy for the remote VC's occupancy in some cases.
+            //  For example, an incast to the local VC would cause the local VC to fill faster than the remote VC
+            //  TODO: track credits more effectively  (Kevin Brown)
+            //      if(pending_msgs[k] != NULL && vc_occupancy[k] + chunk_size <= vc_size)
             if(pending_msgs[k] != NULL)
             {
                 #if DEBUG_QOS_X == 1
@@ -367,7 +367,7 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
                     *last_saved_qos = q->last_lvl;  // Is this correct for RC KBEDIT
 
                 q->last_lvl = next_rr_vcg;
-    //printf("================================== GOTTEN ========================================\n");
+
                 return k;
             }
         }
@@ -378,7 +378,6 @@ int qos_token_get_next_vcg(const qos_params * qp, qos_state * q, int vcs_per_qos
     printf("[%.0lf] qos_send_excess %c:%d port:%d ----  (no data to send)\n", tw_now(lp), 
             node_type, node_id, port);
     #endif
-    //printf("================================== GOTTEN ========================================\n");
 
     return -1;
 }
