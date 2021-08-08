@@ -4706,6 +4706,7 @@ static void router_packet_receive( router_state * s,
         memcpy(cur_chunk->event_data, m_data_src, msg->remote_event_size_bytes);
     }
 
+    printf("_Q0_packet_recv             on=\t%d:i for_port=%d \t now=%9.2f \t  \t src_terminal_gid=%d (router_arrive)\n", s->router_id, output_port, tw_now(lp), cur_chunk->msg.src_terminal_id);
     if(s->vc_occupancy[output_port][output_chan] + s->params->chunk_size  <= max_vc_size) {
         bf->c2 = 1;
         assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
@@ -4719,6 +4720,7 @@ static void router_packet_receive( router_state * s,
             terminal_dally_message *m;
             msg->num_cll++;
             ts = maxd(s->next_output_available_time[output_port], tw_now(lp)) - tw_now(lp);
+            printf("_Q0_packet_recv (send_loop) on=\t%d:i for_port=%d \t now=%9.2f \t  \t src_terminal_gid=%d (router_arrive)     ts=%f\n", s->router_id, output_port, tw_now(lp), cur_chunk->msg.src_terminal_id, ts);
             tw_event *e = model_net_method_event_new(lp->gid, ts, lp,
                     DRAGONFLY_DALLY_ROUTER, (void**)&m, NULL);
             m->type = R_SEND;
@@ -4912,6 +4914,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
         bandwidth = s->params->global_bandwidth;
     }
 
+    printf("_Q000____________(sending)  on= %d:%d now=%9.2f \t avail=%9.2f \t src_terminal_gid=%d\n", s->router_id, output_port, tw_now(lp), s->next_output_available_time[output_port], cur_entry->msg.src_terminal_id);
     uint64_t num_chunks = cur_entry->msg.packet_size / s->params->chunk_size;
     if(cur_entry->msg.packet_size < s->params->chunk_size)
         num_chunks++;
@@ -5044,6 +5047,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     cur_entry = s->pending_msgs[output_port][next_output_chan];
     assert(cur_entry != NULL); 
 
+    printf("_Q0______________(looping)  on= %d:%d now=%9.2f \t avail=%9.2f \t src_terminal_gid=%d     injection_ts=%f\n", s->router_id, output_port, tw_now(lp), s->next_output_available_time[output_port], cur_entry->msg.src_terminal_id, injection_ts);
     terminal_dally_message *m_new;
     e = model_net_method_event_new(lp->gid, injection_ts, lp, DRAGONFLY_DALLY_ROUTER,
                 (void**)&m_new, NULL);
@@ -5133,11 +5137,13 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
         s->queued_count[indx] -= s->params->chunk_size; 
     }
 
+    printf("_Q0_credit_recv             on=\t%d:%d for_port=%d \t now=%9.2f \t  \t src_terminal_gid=  (credit)\n", s->router_id, indx, indx, tw_now(lp));
     if(s->in_send_loop[indx] == 0 && s->pending_msgs[indx][output_chan] != NULL) {
         bf->c2 = 1;
         terminal_dally_message *m;
         msg->num_cll++;
         tw_stime ts = maxd(s->next_output_available_time[indx], tw_now(lp)) - tw_now(lp);
+        printf("_Q0_credit_recv (send_loop) on=\t%d:%d for_port=%d \t now=%9.2f \t  \t src_terminal_gid=  (credit)     ts=%f\n", s->router_id, indx, indx, tw_now(lp), ts);
         tw_event *e = model_net_method_event_new(lp->gid, ts, lp, DRAGONFLY_DALLY_ROUTER,
                 (void**)&m, NULL);
         m->type = R_SEND;
