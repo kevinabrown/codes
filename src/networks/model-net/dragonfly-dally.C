@@ -50,6 +50,9 @@
 #define DEBUG_QOS_X 0
 #define DEBUG_QOS_R 1
 #define DEBUG_QOS_T 1
+#define DEBUG_ROUTING_SCORE 0
+#define DEBUG_ROUTING_SCORE_ROUTER1 0
+#define DEBUG_ROUTING_SCORE_ROUTER2 599
 #define DEBUG_ROUTING_DECISION 0
 #define T_ID -1
 #define TRACK -1
@@ -181,6 +184,7 @@ static FILE * dragonfly_rtr_bw_log = NULL;
 static FILE * dragonfly_net_pk_log = NULL;
 static FILE * dragonfly_term_pk_log = NULL;
 static FILE * dragonfly_rtr_rtg_log = NULL;
+static FILE * dragonfly_route_score_log = NULL;
 //static FILE * dragonfly_term_bw_log = NULL;
 
 static int sample_bytes_written = 0;
@@ -1489,9 +1493,22 @@ static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf
         Connection bad_conn;
         bad_conn.src_gid = -1;
         bad_conn.port = -1;
+
+        #if DEBUG_ROUTING_SCORE == 1
+        //if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+        //    fprintf(dragonfly_route_score_log, "%d:%d", -1, -1);
+        //}
+        #endif
+
         return bad_conn;
     }
     if (conns.size() == 1) { //no need to compare singular connection
+        #if DEBUG_ROUTING_SCORE == 1
+        //if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+        //    fprintf(dragonfly_route_score_log, "%d:%d", conns[0].port, -1);
+        //}
+        #endif
+
         return conns[0];
     }
 
@@ -1503,6 +1520,14 @@ static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf
     for(int i = 0; i < num_to_compare; i++)
     {
         scores[i] = dfdally_score_connection(s, bf, msg, lp, conns[i], C_MIN);
+        #if DEBUG_ROUTING_SCORE == 1
+        if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+            fprintf(dragonfly_route_score_log, "%d:%d", conns[i].port, scores[i]);
+
+            if (i < num_to_compare-1) // if we have more ports to score
+                fprintf(dragonfly_route_score_log, ",");
+        }
+        #endif
         if (scores[i] <= best_score) {
             if (scores[i] < best_score) {
                 best_score = scores[i];
@@ -4040,6 +4065,15 @@ void router_dally_init(router_state * r, tw_lp * lp)
         fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold by-nonmin-score");
     }
     #endif
+    #if DEBUG_ROUTING_SCORE == 1
+    char rtr_scr_log[128];
+    sprintf(rtr_scr_log, "router-scoring-sample-%lu-%ld", g_tw_mynode, (long)getpid());
+    if(dragonfly_route_score_log == NULL)
+    {
+        dragonfly_route_score_log = fopen(rtr_scr_log, "w+");
+        fprintf(dragonfly_route_score_log, "\n time-stamp router-id qos-level path-type port-scores");
+    }
+    #endif
 
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
@@ -5611,6 +5645,9 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp){
         #if DEBUG_ROUTING_DECISION == 1
         fclose(dragonfly_rtr_rtg_log);
         #endif
+        #if DEBUG_ROUTING_SCORE == 1
+        fclose(dragonfly_route_score_log);
+        #endif
     }
 
     rc_stack_destroy(s->st);
@@ -5733,6 +5770,13 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
                 vector< Connection > poss_next_stops = s->connMan.get_connections_to_gid(msg->dfdally_dest_terminal_id, CONN_TERMINAL);
                 if (poss_next_stops.size() < 1)
                     tw_error(TW_LOC, "Destination Router %d: No connection to destination terminal %d\n", s->router_id, msg->dfdally_dest_terminal_id); //shouldn't happen unless math was wrong
+
+                #if DEBUG_ROUTING_SCORE == 1
+                if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+                    // get_vcg_from_category(msg) may cause an error if category isn't a known QoS level
+                    fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 4);
+                }
+                #endif
                 
                 Connection best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_next_stops);
                 return best_min_conn;
@@ -5749,6 +5793,13 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
                     
 
                 if (isRoutingAdaptive(routing)) { // Pick the best connection
+                    #if DEBUG_ROUTING_SCORE == 1
+                    if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+                        // get_vcg_from_category(msg) may cause an error if category isn't a known QoS level
+                        fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 5); // 0 for min connection type
+                    }
+                    #endif
+
                     Connection best_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, conns_to_fdest);
                     return best_conn;
                 }
@@ -7095,11 +7146,23 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         conn_type_of_nonmins = poss_nonmin_next_stops[0].conn_type;
     }
 
+    #if DEBUG_ROUTING_SCORE == 1
+    if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+        // get_vcg_from_category(msg) may cause an error if category isn't a known QoS level
+        fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 0); // 0 for min connection type
+    }
+    #endif
     if (conn_type_of_mins == CONN_GLOBAL)
         best_min_conn = dfdally_get_best_from_k_connections(s, bf, msg, lp, poss_min_next_stops, s->params->global_k_picks);
     else
         best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_min_next_stops); //could use from_k_connections function but that's very expensive when k == size of input connections
     
+    #if DEBUG_ROUTING_SCORE == 1
+    if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+        // get_vcg_from_category(msg) may cause an error if category isn't a known QoS level
+        fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 1); // 1 for non-min connection type
+    }
+    #endif
     if (conn_type_of_nonmins == CONN_GLOBAL)
         best_nonmin_conn = dfdally_get_best_from_k_connections(s, bf, msg, lp, poss_nonmin_next_stops, s->params->global_k_picks);
     else
@@ -7107,6 +7170,17 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
     int min_score = dfdally_score_connection(s, bf, msg, lp, best_min_conn, C_MIN);
     int nonmin_score = dfdally_score_connection(s, bf, msg, lp, best_nonmin_conn, C_NONMIN);
+
+    #if DEBUG_ROUTING_SCORE == 1
+    if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
+        // if there was a single conn in the list, it would not have been scored above, so lets make try to score it now
+        // get_vcg_from_category(msg) may cause an error if category isn't a known QoS level
+        if (min_score != INT_MAX)
+            fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 2, best_min_conn.port, min_score); // 2 for final min score 
+        if (nonmin_score != INT_MAX)
+            fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 3, best_nonmin_conn.port, nonmin_score); // 3 for final nonmin score
+    }
+    #endif
 
     if ((msg->path_type == NON_MINIMAL) && (msg->is_intm_visited != 1)) { //if we're nonminimal and haven't reached the intermediate group yet
         //must pick non-minimal (if we have visited, we can pick minimal then as nonminimal will be an empty vector)
