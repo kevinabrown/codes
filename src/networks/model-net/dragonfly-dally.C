@@ -1301,7 +1301,7 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
             {
                 score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         case BETA: //considers vc occupancy and queued count multiplied by the number of minimal hops to destination from the potential next stop
             tw_error(TW_LOC, "Beta scoring not implemented");
@@ -1314,7 +1314,7 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
             {
                 score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
 
             if (c_minimality != C_MIN)
                 score = score * 2;
@@ -1324,14 +1324,14 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
             {
                 score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         case ZETA: // consider queue count and the occupancy of my vc only
             for(int k = base_vc; k < base_vc + vcs_per_qos; k++)
             {
                 score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         default:
             tw_error(TW_LOC, "Unsupported Scoring Protocol Error\n");
