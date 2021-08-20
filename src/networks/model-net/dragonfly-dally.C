@@ -1350,18 +1350,18 @@ static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf
         bad_conn.port = -1;
 
         #if DEBUG_ROUTING_SCORE == 1
-        if(s->router_id == 0 || s->router_id == 599){
-            fprintf(dragonfly_route_score_log, "%d:%d", -1, -1);
-        }
+        //if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
+        //    fprintf(dragonfly_route_score_log, "%d:%d", -1, -1);
+        //}
         #endif
 
         return bad_conn;
     }
     if (conns.size() == 1) { //no need to compare singular connection
         #if DEBUG_ROUTING_SCORE == 1
-        if(s->router_id == 0 || s->router_id == 599){
-            fprintf(dragonfly_route_score_log, "%d:%d", conns[0].port, -1);
-        }
+        //if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
+        //    fprintf(dragonfly_route_score_log, "%d:%d", conns[0].port, -1);
+        //}
         #endif
 
         return conns[0];
@@ -1376,7 +1376,7 @@ static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf
     {
         scores[i] = dfdally_score_connection(s, bf, msg, lp, conns[i], C_MIN);
         #if DEBUG_ROUTING_SCORE == 1
-        if(s->router_id == 0 || s->router_id == 599){
+        if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
             fprintf(dragonfly_route_score_log, "%d:%d", conns[i].port, scores[i]);
 
             if (i < num_to_compare-1) // if we have more ports to score
@@ -4802,7 +4802,7 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
             if (poss_next_stops.size() < 1)
                 tw_error(TW_LOC, "Destination Router %d: No connection to destination terminal %d\n", s->router_id, msg->dfdally_dest_terminal_id); //shouldn't happen unless math was wrong
             #if DEBUG_ROUTING_SCORE == 1
-            if(s->router_id == 0 || s->router_id == 599){
+            if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
                 fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 4); // 0 for min connection type
             }
             #endif
@@ -4816,7 +4816,7 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
 
             if (isRoutingAdaptive(routing)) { // Pick the best connection
                 #if DEBUG_ROUTING_SCORE == 1
-                if(s->router_id == 0 || s->router_id == 599){
+                if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
                     fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 5); // 0 for min connection type
                 }
                 #endif
@@ -6042,7 +6042,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     }
 
     #if DEBUG_ROUTING_SCORE == 1
-    if(s->router_id == 0 || s->router_id == 599){
+    if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
         fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 0); // 0 for min connection type
     }
     #endif
@@ -6052,7 +6052,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_min_next_stops); //could use from_k_connections function but that's very expensive when k == size of input connections
     
     #if DEBUG_ROUTING_SCORE == 1
-    if(s->router_id == 0 || s->router_id == 599){
+    if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
         fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 1); // 1 for non-min connection type
     }
     #endif
@@ -6065,9 +6065,12 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     int nonmin_score = dfdally_score_connection(s, bf, msg, lp, best_nonmin_conn, C_NONMIN);
 
     #if DEBUG_ROUTING_SCORE == 1
-    if(s->router_id == 0 || s->router_id == 599){// if there was a singel conn in the list, it would not have been scored above, so lets make try to score it now
-        fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 2, best_min_conn.port, min_score); // 2 for final min score 
-        fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 3, best_nonmin_conn.port, nonmin_score); // 3 for final nonmin score
+    if(s->router_id == 0 || s->router_id == 599 || s->router_id == 600){
+        // if there was a single conn in the list, it would not have been scored above, so lets make try to score it now
+        if (min_score != INT_MAX)
+            fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 2, best_min_conn.port, min_score); // 2 for final min score 
+        if (nonmin_score != INT_MAX)
+            fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d %d:%d", tw_now(lp), s->router_id, get_vcg_from_category(msg), 3, best_nonmin_conn.port, nonmin_score); // 3 for final nonmin score
     }
     #endif
 
