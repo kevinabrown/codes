@@ -45,7 +45,8 @@
 #define DEBUG_LP 892
 #define DEBUG_QOS 1
 #define DEBUG_QOS_X 0
-#define PRINT_MSG_TIMES 1
+#define DEBUG_QOS_T 1
+#define PRINT_MSG_TIMES 0
 #define T_ID -1
 #define TRACK -1
 #define TRACK_PKT -1
@@ -131,6 +132,7 @@ static double maxd(double a, double b) { return a < b ? b : a; }
 
 /* minimal and non-minimal packet counts for adaptive routing*/
 static long *minimal_count, *nonmin_count;
+static long *g_minimal_count, *g_nonmin_count;
 static long num_routers_per_mgrp = 0;
 
 typedef struct dragonfly_param dragonfly_param;
@@ -151,6 +153,7 @@ static int router_magic_num = 0;
 static int terminal_magic_num = 0;
 
 static FILE * dragonfly_rtr_bw_log = NULL;
+static FILE * dragonfly_term_pk_log = NULL;
 //static FILE * dragonfly_term_bw_log = NULL;
 
 static int sample_bytes_written = 0;
@@ -448,6 +451,11 @@ struct terminal_state
 
     tw_stime *max_latency;
     tw_stime *min_latency;
+
+    tw_stime *period_total_time;
+    long *period_finished_chunks;
+    tw_stime *period_max_latency;
+    tw_stime *period_min_latency;
 
     char output_buf[4096];
     char output_buf2[4096];
@@ -2196,11 +2204,29 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
     msg->rc_is_qos_set = 1;
     //RC data storage end.
 
+    #if DEBUG_QOS_T == 1 
+    // Print packet stats
+    if(dragonfly_term_pk_log != NULL)
+    {
+        for(int i = 0; i < num_qos_levels; i++)
+        {
+            // time-stamp %d qos-level %lf avg-chunk-latency %lf max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks
+	    if(s->period_max_latency[i] > 0)
+                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf", tw_now(lp)/1000.0, s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i]);
+        }
+    }
+    #endif
+
     /* Reset the qos status and bandwidth consumption. */
     for(int i = 0; i < num_qos_levels; i++)
     {
         s->qos_status[i] = Q_ACTIVE_UNSATED;
         s->qos_data[i] = 0;
+
+	s->period_total_time[i] = 0;
+	s->period_finished_chunks[i] = 0;
+	s->period_min_latency[i] = INT_MAX;
+	s->period_max_latency[i] = 0;
     }
 
     if(tw_now(lp) > max_qos_monitor)
@@ -2954,11 +2980,14 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
 
         minimal_count = (long*)calloc(num_qos_levels, sizeof(long));
         nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
+        g_minimal_count = (long*)calloc(num_qos_levels, sizeof(long));
+        g_nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
 
 #if PRINT_MSG_TIMES == 1
         rdfdally_file = fopen("/tmp/r-dfdally.out", "w");
         fprintf(rdfdally_file, "time destination source qosclass num.hops latency router.queue.time");
 #endif
+	tw_output(lp, "\n PID myprocid-%lu-%ld ",  g_tw_mynode, (long)getpid()); // Record pid at the start of the simulation.
     }
  
     s->packet_gen = (long*)calloc(num_qos_levels, sizeof(long));
@@ -2969,6 +2998,11 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
 
     s->min_latency = (tw_stime*)calloc(num_qos_levels, sizeof(tw_stime));
     s->max_latency = (tw_stime*)calloc(num_qos_levels, sizeof(tw_stime));
+
+    s->period_total_time = (tw_stime*)calloc(num_qos_levels, sizeof(tw_stime));
+    s->period_min_latency = (tw_stime*)calloc(num_qos_levels, sizeof(tw_stime));
+    s->period_max_latency = (tw_stime*)calloc(num_qos_levels, sizeof(tw_stime));
+    s->period_finished_chunks = (long*)calloc(num_qos_levels, sizeof(long));
 
     s->link_traffic=0.0;
     s->finished_msgs = (long*)calloc(num_qos_levels, sizeof(long));
@@ -3007,11 +3041,17 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         s->qos_data[i] = 0;
         s->qos_status[i] = Q_ACTIVE_UNSATED;
         s->vc_occupancy[i]=0;
+        s->min_latency[i] = INT_MAX;
         s->qos_min_token_count[i] = 0.0;
         s->qos_max_token_count[i] = 0.0;
         s->qos_min_update_time[i] = 0.0;
         s->qos_max_update_time[i] = 0.0;
-        s->min_latency[i] = INT_MAX;
+
+
+	    s->period_total_time[i] = 0;
+	    s->period_min_latency[i] = INT_MAX;
+	    s->period_max_latency[i] = 0.0;
+	    s->period_finished_chunks[i] = 0;
     }
 
     s->last_qos_lvl = 0;
@@ -3086,13 +3126,21 @@ void router_dally_init(router_state * r, tw_lp * lp)
     
     char rtr_bw_log[128];
     sprintf(rtr_bw_log, "router-bw-tracker-%lu-%ld", g_tw_mynode, (long)getpid());
-
     if(dragonfly_rtr_bw_log == NULL)
     {
         dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
 
         fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent");
     }
+
+    char term_pk_log[128];
+    sprintf(term_pk_log, "terminal-packet-stats-%lu-%ld", g_tw_mynode, (long)getpid());
+    if(dragonfly_term_pk_log == NULL)
+    {
+        dragonfly_term_pk_log = fopen(term_pk_log, "w+");
+        fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max");
+    }
+
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
     r->is_monitoring_bw = 0;
@@ -3815,10 +3863,17 @@ static void packet_arrive_rc(terminal_state * s, tw_bf * bf, terminal_dally_mess
         packet_fin[vcg]--;
     }
 
-    if(msg->path_type == MINIMAL)
+    if(msg->path_type == MINIMAL){
         minimal_count[vcg]--;
-    if(msg->path_type == NON_MINIMAL)
+        if(msg->my_g_hop > 0)
+            g_minimal_count[vcg]--;
+
+    }
+    if(msg->path_type == NON_MINIMAL){
         nonmin_count[vcg]--;
+        if(msg->my_g_hop > 0)
+            g_nonmin_count[vcg]--;
+    }
 
     N_finished_chunks[vcg]--;
     s->finished_chunks[vcg]--;
@@ -3980,6 +4035,7 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     N_finished_chunks[vcg]++;
     /* Finished chunks on a LP basis */
     s->finished_chunks[vcg]++;
+    s->period_finished_chunks[vcg]++;
     /* Finished chunks per sample */
     s->fin_chunks_sample++;
     s->ross_sample.fin_chunks_sample++;
@@ -3992,11 +4048,17 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     if (msg->packet_size < s->params->chunk_size)
         num_chunks++;
 
-    if(msg->path_type == MINIMAL)
+    if(msg->path_type == MINIMAL){
         minimal_count[vcg]++;
+        if(msg->my_g_hop > 0)
+            g_minimal_count[vcg]++;
+    }
 
-    if(msg->path_type == NON_MINIMAL)
+    if(msg->path_type == NON_MINIMAL){
         nonmin_count[vcg]++;
+        if(msg->my_g_hop > 0)
+            g_nonmin_count[vcg]++;
+    }
 
     if(msg->chunk_id == num_chunks - 1)
     {
@@ -4017,6 +4079,7 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     /* save the total time per LP */
     msg->saved_avg_time = s->total_time[vcg];
     s->total_time[vcg] += (tw_now(lp) - msg->travel_start_time); 
+    s->period_total_time[vcg] += (tw_now(lp) - msg->travel_start_time); 
     total_hops[vcg] += msg->my_N_hop;
     s->total_hops[vcg] += msg->my_N_hop;
     s->fin_hops_sample += msg->my_N_hop;
@@ -4100,11 +4163,17 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     if(s->min_latency[vcg] > tw_now(lp) - msg->travel_start_time) {
 		s->min_latency[vcg] = tw_now(lp) - msg->travel_start_time;	
 	}
+    if(s->period_min_latency[vcg] > tw_now(lp) - msg->travel_start_time) {
+		s->period_min_latency[vcg] = tw_now(lp) - msg->travel_start_time;	
+	}
 
 	if(s->max_latency[vcg] < tw_now( lp ) - msg->travel_start_time) {
         bf->c22 = 1;
         msg->saved_available_time = s->max_latency[vcg];
         s->max_latency[vcg] = tw_now(lp) - msg->travel_start_time;
+	}
+	if(s->period_max_latency[vcg] < tw_now( lp ) - msg->travel_start_time) {
+        	s->period_max_latency[vcg] = tw_now(lp) - msg->travel_start_time;
 	}
     /* If all chunks of a message have arrived then send a remote event to the
      * callee*/
