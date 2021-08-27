@@ -32,7 +32,7 @@
 #define MAX_STATS 65536
 #define COL_TAG 1235
 #define BAR_TAG 1234
-#define PRINT_SYNTH_TRAFFIC 1
+#define PRINT_SYNTH_TRAFFIC 0
 #define MAX_JOBS 64
 #define NEAR_ZERO .0001 //timestamp for use to be 'close to zero' but still allow progress, zero offset events are hard on the PDES engine
 #define OUTPUT_MARKS 0
@@ -3344,7 +3344,6 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
         {
             //TODO: can we allow for a 2 item line but with defaults for the last two?
             ref = fscanf(name_file, "%d %s %d %f", &num_traces_of_job[i], file_name_of_job[i], &qos_level_of_job[i], &mean_interval_of_job[i]);
-            //KEV ref = fscanf(name_file, "%d %s %d", &num_traces_of_job[i], file_name_of_job[i], &qos_level_of_job[i]);
             
             if(ref != EOF && strncmp(file_name_of_job[i], "synthetic", 9) == 0)
             {
@@ -3353,9 +3352,9 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
               is_job_synthetic[i] = 1;
               is_synthetic = 1;
               num_total_jobs += 1;
-	      // Make sure BISECTION job has even number of clients
-	      if (strcmp(file_name_of_job[i], "synthetic6") == 0 && num_traces_of_job[i] % 2 != 0)
-		tw_error(TW_LOC, "BISECTION requires and even number of nodes.");
+	            // Make sure BISECTION job has even number of clients
+	            if (strcmp(file_name_of_job[i], "synthetic6") == 0 && num_traces_of_job[i] % 2 != 0)
+		            tw_error(TW_LOC, "BISECTION requires and even number of nodes.");
 
             }
             else if(ref!=EOF)
