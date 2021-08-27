@@ -348,6 +348,7 @@ typedef enum event_t
     R_SEND,
     R_ARRIVE,
     R_BUFFER,
+    R_MIN_SWITCH,
     R_BANDWIDTH,
     R_BW_HALT,
     T_BANDWIDTH,
@@ -3048,6 +3049,13 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
         tw_event_send(e);
     }
 }
+
+/* Used for test where routing algorithm is switched during the simulation. */
+void router_switch_min(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
+{
+    routing = MINIMAL;
+}
+
 static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
 {
     int num_qos_levels = s->params->num_qos_levels;
@@ -4253,6 +4261,15 @@ void router_dally_init(router_state * r, tw_lp * lp)
         tw_event_send(e);
         r->is_monitoring_bw = 1;
     }
+    /*if(r->router_id == 0)
+    {
+        terminal_dally_message * m2;
+        tw_event * e2 = model_net_method_event_new(lp->gid, 125000, lp,
+            DRAGONFLY_DALLY_ROUTER, (void**)&m2, NULL);
+        m2->type = R_MIN_SWITCH;
+        m2->magic = router_magic_num;
+        tw_event_send(e2);
+    }*/
 
     return;
 }	
@@ -6654,6 +6671,11 @@ void router_dally_event(router_state * s, tw_bf * bf, terminal_dally_message * m
         case R_BUFFER:
             // printf("%d: router buf update\n", s->router_id);
             router_buf_update(s, bf, msg, lp);
+        break;
+
+        case R_MIN_SWITCH:
+            printf("%d: switching to minimal\n", s->router_id);
+            router_switch_min(s, bf, msg, lp);
         break;
 
         case R_BANDWIDTH:
