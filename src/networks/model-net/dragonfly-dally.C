@@ -1297,7 +1297,35 @@ static int dfdally_get_assigned_router_id_from_terminal(const dragonfly_param *p
             return (term_gid / num_cn_per_router) + (rail_id * routers_per_plane);
         }
     }
+}
     
+/* Apply additional adjustments to the scores beyond vc/queue occupancies. */
+static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, tw_lp *lp, conn_minimality_t c_minimality, int score)
+{
+    int port = conn.port;
+    /* Do nothing if we're doing DELTA scoring. DELTA has a pre-applied
+     * 2:1 minimal bias */
+    if (port == -1 || scoring == DELTA || scoring_factors == NULL) {
+        return score;
+    }
+
+    int new_score = score;
+    int vcg = 0;
+
+    if(s->params->num_qos_levels > 1)
+        vcg = get_vcg_from_category(msg);
+
+    if(scoring_factors[vcg] > 0 && c_minimality == C_NONMIN)
+    {
+        // if the factor is >0, then bias towards minimal by increasing the non-minimal score
+        new_score = score * scoring_factors[vcg];
+    } else if(scoring_factors[vcg] < 0 && c_minimality == C_MIN)
+    {
+        // if the factor is <0, then bias towards non-minimal by increasing the minimal score
+        new_score = score * scoring_factors[vcg] * -1;
+    }
+
+    return new_score;
 }
 
 /* Checks if port occupancy exceeds the adaptive routing upper threshold. Uses
@@ -1388,8 +1416,10 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
 {
     int score = 0;
     int port = conn.port;
-    int vcg = get_vcg_from_category(msg);
     int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
+    int vcg = 0;
+    if (s->params->num_qos_levels > 1)
+        vcg = get_vcg_from_category(msg);
     int base_vc = vcg * vcs_per_qos;
 
     if (port == -1) {
@@ -1438,27 +1468,6 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
             tw_error(TW_LOC, "Unsupported Scoring Protocol Error\n");
     }
 
-    if(scoring_factors != NULL)
-    {
-        // debug
-        //if(s->router_id == 2)
-        //printf("\nSCORE [%d] === %d ", c_minimality, score);
-
-        // if the factor is >0, then bias towards minimal by increasing the non-minimal score
-        if(scoring_factors[vcg] > 0 && c_minimality == C_NONMIN)
-        {
-            score = score * scoring_factors[vcg];
-        }
-        // if the factor is <0, then bias towards non-minimal by increasing the minimal score
-        if(scoring_factors[vcg] < 0 && c_minimality == C_MIN) 
-        {
-            score = score * scoring_factors[vcg] * -1;
-        }
-
-        //debug
-        //if(s->router_id == 2)
-        //printf("==> %d \n", score);
-    }
 
     return score;
 }
