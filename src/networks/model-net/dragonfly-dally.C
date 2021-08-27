@@ -45,9 +45,10 @@
 #define DEBUG_LP 892
 #define DEBUG_QOS 1
 #define DEBUG_QOS_X 0
-#define DEBUG_QOS_T 1
 #define DEBUG_QOS_R 1
-#define PRINT_MSG_TIMES 1
+#define DEBUG_QOS_T 1
+#define DEBUG_ROUTING_DECISION 1
+#define PRINT_MSG_TIMES 0
 #define T_ID -1
 #define TRACK -1
 #define TRACK_PKT -1
@@ -156,6 +157,7 @@ static int terminal_magic_num = 0;
 static FILE * dragonfly_rtr_bw_log = NULL;
 static FILE * dragonfly_net_pk_log = NULL;
 static FILE * dragonfly_term_pk_log = NULL;
+static FILE * dragonfly_rtr_rtg_log = NULL;
 //static FILE * dragonfly_term_bw_log = NULL;
 
 static int sample_bytes_written = 0;
@@ -537,6 +539,13 @@ struct router_state
     int** qos_yellow_sent;
     int** qos_red_total;
     int** qos_red_sent;
+#endif
+#if DEBUG_ROUTING_DECISION == 1
+    int* route_min_score;    // counts when min_score <= non_min score   (threshold not considered)
+    int* route_min_score_only;    // counts when min_score <= non_min score   & score > threshold
+    int* route_lower_threshold;    // counts when min_score <= threshold value (bytes)
+    int* route_upper_threshold;    // counts when min_score <= threshold value (bytes)
+    int* route_nonmin_score; // counts when threshold < nonmin_score < min_score
 #endif
 
     const char * anno;
@@ -2533,6 +2542,22 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
         }
     }
     #endif   
+    #if DEBUG_ROUTING_DECISION == 1
+    if(dragonfly_rtr_rtg_log != NULL){
+        for(int j = 0; j < num_qos_levels; j++){
+            if(s->route_min_score[j] > 0 || s->route_lower_threshold[j] > 0 || s->route_upper_threshold[j] > 0 || s->route_nonmin_score[j] > 0){
+                fprintf(dragonfly_rtr_rtg_log, "\n %.0f %d %d %d %d %d %d %d", tw_now(lp), s->router_id, j, s->route_min_score[j], s->route_min_score_only[j], s->route_lower_threshold[j], s->route_upper_threshold[j], s->route_nonmin_score[j]);
+            
+                s->route_min_score[j] = 0;
+                s->route_min_score_only[j] = 0;
+                s->route_lower_threshold[j] = 0;
+                s->route_upper_threshold[j] = 0;
+                s->route_nonmin_score[j] = 0;
+            }
+        }
+    }
+    #endif
+
 
     /* Reset the qos status and bandwidth consumption. */
     for(int i = 0; i < s->params->radix; i++)
@@ -3373,6 +3398,16 @@ void router_dally_init(router_state * r, tw_lp * lp)
         dragonfly_term_pk_log = fopen(term_pk_log, "w+");
         fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max");
     }
+    #if DEBUG_ROUTING_DECISION == 1
+    /* Todo: This file could be appended to router-bw-tracker-, but I don't want to redo my analysis scripts for router-bw-tracker- at the moment. - Kevin Brown */
+    char rtr_rtg_log[128];
+    sprintf(rtr_rtg_log, "router-routing-stats-%lu-%ld", g_tw_mynode, (long)getpid());
+    if(dragonfly_rtr_rtg_log == NULL)
+    {
+        dragonfly_rtr_rtg_log = fopen(rtr_rtg_log, "w+");
+        fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold by-nonmin-score");
+    }
+    #endif
 
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
@@ -3436,6 +3471,21 @@ void router_dally_init(router_state * r, tw_lp * lp)
     r->ross_rsample.link_traffic_sample = (int64_t*)calloc(p->radix, sizeof(int64_t));
 
     rc_stack_create(&r->st);
+
+#if DEBUG_ROUTING_DECISION == 1
+    r->route_min_score = (int*)calloc(num_qos_levels, sizeof(int));
+    r->route_min_score_only = (int*)calloc(num_qos_levels, sizeof(int));
+    r->route_lower_threshold = (int*)calloc(num_qos_levels, sizeof(int));
+    r->route_upper_threshold = (int*)calloc(num_qos_levels, sizeof(int));
+    r->route_nonmin_score = (int*)calloc(num_qos_levels, sizeof(int));
+    for(int j = 0; j < num_qos_levels; j++){
+        r->route_min_score[j] = 0;
+        r->route_min_score_only[j] = 0;
+        r->route_lower_threshold[j] = 0;
+        r->route_upper_threshold[j] = 0;
+        r->route_nonmin_score[j] = 0;
+    }
+#endif
 
     for(int i=0; i < p->radix; i++)
     {
@@ -4585,6 +4635,9 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp)
         fclose(dragonfly_rtr_bw_log);
         #if DEBUG_QOS_R == 1
         fclose(dragonfly_net_pk_log);
+        #endif
+        #if DEBUG_ROUTING_DECISION == 1
+        fclose(dragonfly_rtr_rtg_log);
         #endif
     }
 
@@ -5950,6 +6003,31 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
             exceed_adaptive_upper_threshold(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){ // if buffer are over capacity
         upper_threshold_exceeded = true;
     }
+
+    /* Debugging code for tracking how routing decisions are made. Added by Kevin Brown on 2021/08 during routing+qos study*/
+    #if DEBUG_ROUTING_DECISION == 1
+    int vcg = 0;
+    if (s->params->num_qos_levels > 1)
+        vcg = get_vcg_from_category(msg);
+
+    if (upper_threshold_exceeded)
+        s->route_upper_threshold[vcg]++;
+
+    if (min_score <= nonmin_score) {
+        s->route_min_score[vcg]++;
+        if (min_score > adaptive_threshold && !upper_threshold_exceeded)
+            s->route_min_score_only[vcg]++;
+    } else {
+        if (min_score <= adaptive_threshold){
+            s->route_lower_threshold[vcg]++;
+        } else {
+            //if (upper_threshold_exceeded)
+            //    s->route_upper_threshold[vcg]++;
+            //else
+                s->route_nonmin_score[vcg]++;
+        }
+    }
+    #endif
 
     if (min_score <= adaptive_threshold ||
             min_score <= nonmin_score ||
