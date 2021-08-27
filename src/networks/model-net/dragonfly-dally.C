@@ -2293,23 +2293,41 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
     //RC data storage end.
 
 
+    #if DEBUG_QOS == 1 
+    int vcs_per_qos = s->params->num_vcs / num_qos_levels;
+    int base_limit = 0;
     for(int i = 0; i < radix; i++)
     {
         for(int j = 0; j < num_qos_levels; j++)
         {
             double bw_consumed = get_rtr_bandwidth_consumption(s, j, i);
-        
-            #if DEBUG_QOS == 1 
+            base_limit = j * vcs_per_qos;
+
             if(dragonfly_rtr_bw_log != NULL)
             {
                 if(s->qos_green_total[i][j] > 0 || s->qos_yellow_total[i][j] > 0 || s->qos_red_total[i][j] > 0 || s->qos_data[i][j] > 0)
                 {
-                    fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %f %d %d %f %d %d %d %d %d %d", s->router_id, tw_now(lp), i, j, bw_consumed, s->qos_status[i][j], s->qos_data[i][j], s->busy_time_sample[i], s->qos_green_total[i][j], s->qos_green_sent[i][j], s->qos_yellow_total[i][j], s->qos_yellow_sent[i][j], s->qos_red_total[i][j], s->qos_red_sent[i][j]);
+                    fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %f %d %d %f %d %d %d %d %d %d", 
+                            s->router_id, tw_now(lp), i, j, bw_consumed, s->qos_status[i][j], s->qos_data[i][j], s->busy_time_sample[i], 
+                            s->qos_green_total[i][j], s->qos_green_sent[i][j], 
+                            s->qos_yellow_total[i][j], s->qos_yellow_sent[i][j], 
+                            s->qos_red_total[i][j], s->qos_red_sent[i][j]);
+                    
+                    // print colon-delimited per-VC vc_occupancy values for this class
+                    fprintf(dragonfly_rtr_bw_log, " %d", s->vc_occupancy[i][base_limit]);
+                    for(int k = base_limit+1; k < base_limit + vcs_per_qos; k ++)
+                        fprintf(dragonfly_rtr_bw_log, ":%d", s->vc_occupancy[i][k]);
+
+                    // queued_count is per port, NOT class. It's printed with class zero's record, but it's not specific to class zero.
+                    if (j == 0)
+                        fprintf(dragonfly_rtr_bw_log, " %d", s->queued_count[i]);
+                    else
+                        fprintf(dragonfly_rtr_bw_log, " 0");
                 }
             }
-            #endif   
         }
     }
+    #endif   
 
     /* Reset the qos status and bandwidth consumption. */
     for(int i = 0; i < s->params->radix; i++)
@@ -3130,7 +3148,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     {
         dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
 
-        fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent");
+        fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent vc-occupancy queued-count_per-port"); // Kevin Bronw: Added VC occupancy during routing+qos study 2021/05/31
     }
 
     char term_pk_log[128];
