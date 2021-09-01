@@ -178,7 +178,8 @@ enum TRAFFIC
     ALLTOALL = 3, /* sends message to all other nodes */
     STENCIL = 4, /* sends message to 4 nearby neighbors */
     PERMUTATION = 5,
-    BISECTION = 6
+    BISECTION = 6,
+    NEXT_GROUP_8320NODES = 7
 };
 struct mpi_workload_sample
 {
@@ -967,6 +968,16 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
             dest_svr[1] = row * y + ((col+1+y)%y);   /* right neighbor */
             dest_svr[2] = ((row-1+x)%x) * y + col;   /* bottom neighbor */
             dest_svr[3] = ((row+1+x)%x) * y + col;   /* up neighbor */
+        }
+        break;
+        case NEXT_GROUP_8320NODES:
+        {
+	    /* Special case next-group pattern on 8320-node system
+	     * (128 nodes per group)
+	     * */
+            length = 1;
+            dest_svr = (int*) calloc(1, sizeof(int));
+	        dest_svr[0] = (s->local_rank + 128) % num_clients;
         }
         break;
         default:
@@ -2433,7 +2444,7 @@ void nw_test_init(nw_state* s, tw_lp* lp)
    if(strncmp(file_name_of_job[lid.job], "synthetic", 9) == 0)
    {
         sscanf(file_name_of_job[lid.job], "synthetic%d", &synthetic_pattern);
-        if(synthetic_pattern <=0 || synthetic_pattern > 6)
+        if(synthetic_pattern <=0 || synthetic_pattern > 7)
         {
             printf("\n Undefined synthetic pattern: setting to uniform random ");
             s->synthetic_pattern = 1;
