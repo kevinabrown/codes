@@ -2766,6 +2766,7 @@ static void get_next_mpi_operation_rc(nw_state* s, tw_bf * bf, nw_message * m, t
 		break;
 	case CODES_WK_MARK:
 		codes_issue_next_event_rc(lp);
+		printf("\n MARK_UNDO_%d node %llu job %d rank %d time %lf ", m->mpi_op->u.send.tag, LLU(s->nw_id), s->app_id, s->local_rank, m->rc.saved_marker_time);
 		break;
 
 		default:
