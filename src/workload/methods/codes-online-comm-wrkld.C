@@ -24,6 +24,9 @@
 #include "nekbone_swm_user_code.h"
 #include "nearest_neighbor_swm_user_code.h"
 #include "all_to_one_swm_user_code.h"
+#include "spread.h"
+#include "all_reduce.h"
+#include "some_to_some_swm_user_code.h"
 
 #define ALLREDUCE_SHORT_MSG_SIZE 2048
 
@@ -747,6 +750,28 @@ void SWM_Finalize()
     ABT_thread_yield_to(global_prod_thread);
 }
 
+void SWM_Mark_Iteration(SWM_TAG iter_tag)
+{
+    /* Add an event in the shared queue and then yield */
+    struct codes_workload_op wrkld_per_rank;
+
+    wrkld_per_rank.op_type = CODES_WK_MARK;
+    wrkld_per_rank.u.send.tag = iter_tag;
+
+    /* Retreive the shared context state */
+    ABT_thread prod;
+    void * arg;
+    int err = ABT_thread_self(&prod);
+    assert(err == ABT_SUCCESS);
+    err =  ABT_thread_get_arg(prod, &arg);
+    assert(err == ABT_SUCCESS);
+    struct shared_context * sctx = static_cast<shared_context*>(arg);
+    wrkld_per_rank.u.send.source_rank = sctx->my_rank;
+    sctx->fifo.push_back(&wrkld_per_rank);
+
+    ABT_thread_yield_to(global_prod_thread);
+}
+
 static int hash_rank_compare(void *key, struct qhash_head *link)
 {
     rank_mpi_compare *in = (rank_mpi_compare*)key;
@@ -780,6 +805,21 @@ static void workload_caller(void * arg)
     {
        AllToOneSWMUserCode * incast_swm = static_cast<AllToOneSWMUserCode*>(sctx->swm_obj);
        incast_swm->call();
+    }
+    else if(strcmp(sctx->workload_name, "spread") == 0)
+    {
+        SpreadSWMUserCode * spread_swm = static_cast< SpreadSWMUserCode*>(sctx->swm_obj);
+        spread_swm->call();
+    }
+    else if(strcmp(sctx->workload_name, "all_reduce") == 0 || strcmp(sctx->workload_name, "all_reduce32") == 0 || strcmp(sctx->workload_name, "all_reduce256") == 0)
+    {
+        AllReduceSWMUserCode * all_reduce_swm = static_cast< AllReduceSWMUserCode*>(sctx->swm_obj);
+        all_reduce_swm->call();
+    }
+    else if(strcmp(sctx->workload_name, "bulk_data") == 0 || strcmp(sctx->workload_name, "bulk_data1") == 0)
+    {
+        SomeToSomeSWMUserCode * bulk_data_swm = static_cast< SomeToSomeSWMUserCode*>(sctx->swm_obj);
+        bulk_data_swm->call();
     }
 }
 static int comm_online_workload_load(const char * params, int app_id, int rank)
@@ -830,6 +870,30 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     {
         path.append("/incast2.json"); 
     }
+    else if(strcmp(o_params->workload_name, "spread") == 0)
+    {
+        path.append("/spread_workload.json");
+    }
+    else if(strcmp(o_params->workload_name, "all_reduce") == 0)
+    {
+        path.append("/all_reduce_workload.json");
+    }
+    else if(strcmp(o_params->workload_name, "all_reduce32") == 0)
+    {
+        path.append("/all_reduce32_workload.json");
+    }
+    else if(strcmp(o_params->workload_name, "all_reduce256") == 0)
+    {
+        path.append("/all_reduce256_workload.json");
+    }
+    else if(strcmp(o_params->workload_name, "bulk_data") == 0)
+    {
+        path.append("/bulk_data_workload.json");
+    }
+    else if(strcmp(o_params->workload_name, "bulk_data1") == 0)
+    {
+        path.append("/bulk_data_workload1.json");
+    }
     else
         tw_error(TW_LOC, "\n Undefined workload type %s ", o_params->workload_name);
 
@@ -863,6 +927,21 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     {
         AllToOneSWMUserCode * incast_swm = new AllToOneSWMUserCode(root, generic_ptrs);
         my_ctx->sctx.swm_obj = (void*)incast_swm;
+    }
+    else if(strcmp(o_params->workload_name, "spread") == 0)
+    {
+        SpreadSWMUserCode * spread_swm = new SpreadSWMUserCode(root, generic_ptrs);
+        my_ctx->sctx.swm_obj = (void*)spread_swm;
+    }
+    else if(strcmp(o_params->workload_name, "all_reduce") == 0 || strcmp(o_params->workload_name, "all_reduce32") == 0 || strcmp(o_params->workload_name, "all_reduce256") == 0)
+    {
+        AllReduceSWMUserCode * all_reduce_swm = new AllReduceSWMUserCode(root, generic_ptrs);
+        my_ctx->sctx.swm_obj = (void*)all_reduce_swm;
+    }
+    else if(strcmp(o_params->workload_name, "bulk_data") == 0 || strcmp(o_params->workload_name, "bulk_data1") == 0)
+    {
+        SomeToSomeSWMUserCode * bulk_data_swm = new SomeToSomeSWMUserCode(root, generic_ptrs);
+        my_ctx->sctx.swm_obj = (void*)bulk_data_swm;
     }
 
     if(global_prod_thread == NULL)
