@@ -21,7 +21,7 @@
 #define MN_LP_NM "modelnet_dragonfly_custom"
 #define CONTROL_MSG_SZ 64
 #define TRACE -1
-#define MAX_WAIT_REQS 1024
+#define MAX_WAIT_REQS 2048
 #define CS_LP_DBG 1
 #define RANK_HASH_TABLE_SZ 2000
 #define NW_LP_NM "nw-lp"
@@ -2798,7 +2798,7 @@ static void get_next_mpi_operation(nw_state* s, tw_bf * bf, nw_message * m, tw_l
                 {
                     bf->c27 = 1;
                     m->rc.saved_delay = s->all_reduce_time;
-                    s->all_reduce_time += (tw_now(lp) - s->col_time);
+                    s->all_reduce_time += tw_now(lp) - s->col_time;
                     m->rc.saved_send_time = s->col_time;
                     s->col_time = 0;
                     s->num_all_reduce++;
