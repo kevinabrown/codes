@@ -39,6 +39,7 @@
 #include <cortex/topology.h>
 #endif
 
+/* PRINT_MSG_TIMES is set in codes/net/dragonfly-dally.h */
 #define DUMP_CONNECTIONS 0
 #define PRINT_CONFIG 1
 #define DFLY_HASH_TABLE_SIZE 4999
@@ -1151,6 +1152,9 @@ static tw_stime gen_noise(tw_lp *lp, short* rng_counter)
     return 0;
 #endif
 }
+#if PRINT_MSG_TIMES == 1
+FILE *rdfdally_file;
+#endif
 
 /* convert ns to seconds */
 static tw_stime ns_to_s(tw_stime ns)
@@ -2341,6 +2345,10 @@ void dragonfly_dally_report_stats()
             printf("\n[QOS_Class:%d] Total packets generated %ld finished %ld Locally routed- same router %ld different-router %ld Remote (inter-group) %ld \n", 
                     i, total_gen[i], total_fin[i], total_local_packets_sr[i], total_local_packets_sg[i], total_remote_packets[i]);
         }
+#if PRINT_MSG_TIMES == 1
+        fclose(rdfdally_file);
+        system("mv /tmp/r-dfdally.out ./");
+#endif
     }
     free(avg_hops);
     free(total_finished_packets);
@@ -2356,6 +2364,7 @@ void dragonfly_dally_report_stats()
     free(total_local_packets_sr);
     free(total_local_packets_sg);
     free(total_remote_packets);
+
 
     return;
 }
@@ -3379,6 +3388,10 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         minimal_count = (long*)calloc(num_qos_levels, sizeof(long));
         nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
 
+#if PRINT_MSG_TIMES == 1
+        rdfdally_file = fopen("/tmp/r-dfdally.out", "w");
+        fprintf(rdfdally_file, "time destination source qosclass num.hops latency router.queue.time");
+#endif
     }
  
     s->packet_gen = (long*)calloc(num_qos_levels, sizeof(long));
@@ -4769,6 +4782,15 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     msg->saved_rcv_time = stat->recv_time;
     stat->recv_time += ete_latency;
 
+#if PRINT_MSG_TIMES == 1
+    /* We get the exact vcg set on the packet in case num_qos_levels == 0 */
+    int vc_group = get_vcg_from_category(msg);
+    fprintf(rdfdally_file, "\n%lf %d %d %d %d %lf %lf", tw_now(lp), s->terminal_id,
+            codes_mapping_get_lp_relative_id(msg->sender_mn_lp,0,0), 
+            vc_group, msg->my_N_hop, (tw_now(lp) - msg->travel_start_time),
+            msg->router_stall_total_time);
+#endif
+
 #if DEBUG == 1
     if( msg->packet_ID == TRACK 
             && msg->chunk_id == num_chunks-1
@@ -5437,6 +5459,12 @@ static void router_packet_receive( router_state * s,
     if(cur_chunk->msg.last_hop == TERMINAL) // We are first router in the path
         cur_chunk->msg.path_type = MINIMAL; // Route always starts as minimal
 
+#if PRINT_MSG_TIMES == 1
+    // Mark the time that the packet arrives on this router
+    cur_chunk->msg.router_stall_start_time = tw_now(lp);
+    if(cur_chunk->msg.last_hop == TERMINAL)
+        cur_chunk->msg.router_stall_total_time = 0;
+#endif
 
     int num_rngs_before = (cur_chunk->msg).num_rngs;
     Connection next_stop_conn = do_dfdally_routing(s, bf, &(cur_chunk->msg), lp, dest_router_id);
@@ -5795,6 +5823,13 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     msg->saved_available_time = s->next_output_available_time[output_port];
     s->next_output_available_time[output_port] = 
         maxd(s->next_output_available_time[output_port], tw_now(lp));
+
+#if PRINT_MSG_TIMES == 1
+    // Record how long the packet was queued before it could progress
+    cur_entry->msg.router_stall_total_time += s->next_output_available_time[output_port] - 
+                                                cur_entry->msg.router_stall_start_time;
+#endif
+
     s->next_output_available_time[output_port] += injection_delay;
 
     injection_ts = s->next_output_available_time[output_port] - tw_now(lp);

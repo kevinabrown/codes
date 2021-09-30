@@ -13,6 +13,8 @@ extern "C" {
 
 #include <ross.h>
 
+#define PRINT_MSG_TIMES 0
+
 typedef struct terminal_dally_message terminal_dally_message;
 
 /* this message is used for both dragonfly compute nodes and routers */
@@ -118,6 +120,12 @@ struct terminal_dally_message
    tw_stime msg_start_time;
    tw_stime saved_busy_time_ross;
    tw_stime saved_fin_chunks_ross;
+
+   #if PRINT_MSG_TIMES == 1
+   /* Used by the PRINT_MSG_TIMES debug output - captures time spent traversing routers */
+   tw_stime router_stall_start_time;
+   tw_stime router_stall_total_time;
+   #endif
 };
 
 #ifdef __cplusplus
