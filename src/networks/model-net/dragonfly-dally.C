@@ -3850,8 +3850,10 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         g_nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
 
 #if PRINT_MSG_TIMES == 1
-        rdfdally_file = fopen("/tmp/r-dfdally.out", "w");
-        fprintf(rdfdally_file, "time destination source qosclass num.hops latency router.queue.time");
+        char rdfdally_filename[64];
+        sprintf(rdfdally_filename, "rdfdally.out-%lu-%ld", g_tw_mynode, (long)getpid());
+        rdfdally_file = fopen(rdfdally_filename, "w");
+        fprintf(rdfdally_file, "time destination source qosclass num.g.hops num.l.hops latency router.queue.time");
 #endif
 	tw_output(lp, "\n PID myprocid-%lu-%ld ",  g_tw_mynode, (long)getpid()); // Record pid at the start of the simulation.
     }
@@ -5358,9 +5360,9 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
 #if PRINT_MSG_TIMES == 1
     /* We get the exact vcg set on the packet in case num_qos_levels == 0 */
     int vc_group = get_vcg_from_category(msg);
-    fprintf(rdfdally_file, "\n%lf %d %d %d %d %lf %lf", tw_now(lp), s->terminal_id,
+    fprintf(rdfdally_file, "\n%lf %d %d %d %d %d %lf %lf", tw_now(lp), s->terminal_id,
             codes_mapping_get_lp_relative_id(msg->sender_mn_lp,0,0), 
-            vc_group, msg->my_N_hop, (tw_now(lp) - msg->travel_start_time),
+            vc_group, msg->my_g_hop, msg->my_l_hop, (tw_now(lp) - msg->travel_start_time),
             msg->router_stall_total_time);
 #endif
 
