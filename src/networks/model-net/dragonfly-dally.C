@@ -6105,7 +6105,22 @@ static void router_packet_receive( router_state * s,
     int src_group_id = msg->origin_router_id / num_routers;
     int dest_group_id = dest_router_id / num_routers;
 
-    output_chan = 0;
+    int prev_output_channel = cur_chunk->msg.output_chan - (vcg * vcs_per_qos); 
+
+    output_chan = prev_output_channel;
+    if(cur_chunk->msg.last_hop == TERMINAL)
+    { // We are on the first router in the path. Start in VC 0.
+        output_chan = 0;
+    }
+    else if (cur_chunk->msg.last_hop == GLOBAL)
+    { // We just entered a new group. Increment the VC.
+        output_chan++;
+    }
+    else if (cur_chunk->msg.my_hops_cur_group > 1)
+    { // Otherwise, we have just taken a local hop and it wasn't our first in this group.
+        output_chan++;
+    }
+/*
     if (my_group_id == src_group_id)
     {
         output_chan = cur_chunk->msg.my_l_hop;
@@ -6121,12 +6136,14 @@ static void router_packet_receive( router_state * s,
     {
         output_chan = 3;
     }
-
+*/
     if (next_stop_conn.conn_type == CONN_LOCAL)
     {
         max_vc_size = s->params->local_vc_size;
         cur_chunk->msg.my_l_hop++;
         cur_chunk->msg.my_hops_cur_group++;
+
+        assert(cur_chunk->msg.my_hops_cur_group <= 2); //dfdally should not take more than 2 l_hops within a group
     }
     if (next_stop_conn.conn_type == CONN_GLOBAL)
     {
