@@ -125,6 +125,10 @@ struct terminal_dally_message
    /* Used by the PRINT_MSG_TIMES debug output - captures time spent traversing routers */
    tw_stime router_stall_start_time;
    tw_stime router_stall_total_time;
+   /* flags set if packet is routed nonmin within src, intermediate, or dst group */
+   short nm_sgrp;
+   short nm_igrp;
+   short nm_dgrp;
    #endif
 };
 

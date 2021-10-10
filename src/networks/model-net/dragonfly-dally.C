@@ -2646,7 +2646,7 @@ void dragonfly_dally_report_stats()
         }
 #if PRINT_MSG_TIMES == 1
         fclose(rdfdally_file);
-        system("mv /tmp/r-dfdally.out ./");
+        //system("mv /tmp/r-dfdally.out ./");
 #endif
     }
     free(avg_hops);
@@ -3907,7 +3907,7 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         char rdfdally_filename[64];
         sprintf(rdfdally_filename, "rdfdally.out-%lu-%ld", g_tw_mynode, (long)getpid());
         rdfdally_file = fopen(rdfdally_filename, "w");
-        fprintf(rdfdally_file, "time destination source qosclass num.g.hops num.l.hops latency router.queue.time");
+        fprintf(rdfdally_file, "time destination source qosclass num.g.hops num.l.hops nm.sgrp nm.igrp nm.dgrp latency router.queue.time");
 #endif
 	tw_output(lp, "\n PID myprocid-%lu-%ld ",  g_tw_mynode, (long)getpid()); // Record pid at the start of the simulation.
     }
@@ -5414,9 +5414,10 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
 #if PRINT_MSG_TIMES == 1
     /* We get the exact vcg set on the packet in case num_qos_levels == 0 */
     int vc_group = get_vcg_from_category(msg);
-    fprintf(rdfdally_file, "\n%lf %d %d %d %d %d %lf %lf", tw_now(lp), s->terminal_id,
+    //if(tw_now(lp) >= 15000)
+    fprintf(rdfdally_file, "\n%lf %d %d %d %d %d %hi %hi %hi %lf %lf", tw_now(lp), s->terminal_id,
             codes_mapping_get_lp_relative_id(msg->sender_mn_lp,0,0), 
-            vc_group, msg->my_g_hop, msg->my_l_hop, (tw_now(lp) - msg->travel_start_time),
+            vc_group, msg->my_g_hop, msg->my_l_hop, msg->nm_sgrp, msg->nm_igrp, msg->nm_dgrp, (tw_now(lp) - msg->travel_start_time),
             msg->router_stall_total_time);
 #endif
 
@@ -6122,8 +6123,13 @@ static void router_packet_receive( router_state * s,
 #if PRINT_MSG_TIMES == 1
     // Mark the time that the packet arrives on this router
     cur_chunk->msg.router_stall_start_time = tw_now(lp);
-    if(cur_chunk->msg.last_hop == TERMINAL)
+    if (cur_chunk->msg.last_hop == TERMINAL) {
         cur_chunk->msg.router_stall_total_time = 0;
+
+        cur_chunk->msg.nm_sgrp = 0;
+        cur_chunk->msg.nm_igrp = 0;
+        cur_chunk->msg.nm_dgrp = 0;
+    }
 #endif
 
     int num_rngs_before = (cur_chunk->msg).num_rngs;
@@ -6173,6 +6179,24 @@ static void router_packet_receive( router_state * s,
     else if (cur_chunk->msg.my_hops_cur_group > 1)
     { // Otherwise, we have just taken a local hop and it wasn't our first in this group.
         output_chan++;
+
+        #if PRINT_MSG_TIMES == 1
+        if (my_group_id == src_group_id)
+        { // we are in the source group
+            cur_chunk->msg.nm_sgrp++;
+            assert(cur_chunk->msg.nm_sgrp <= 1); // misroute twice in any group
+        }
+        else if (my_group_id == dest_group_id)
+        { // we are in the dst group, which is not the source group
+            cur_chunk->msg.nm_dgrp++;
+            assert(cur_chunk->msg.nm_dgrp <= 1); // misroute twice in any group
+        }
+        else
+        { // we are in the intermediate group
+            cur_chunk->msg.nm_igrp++;
+            assert(cur_chunk->msg.nm_igrp <= 1); // never misroute twice in any group
+        }
+        #endif
     }
 /*
     if (my_group_id == src_group_id)
