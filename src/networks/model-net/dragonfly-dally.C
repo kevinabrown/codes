@@ -1154,7 +1154,8 @@ void dragonfly_dally_sample_fin(terminal_state * s,
 static short routing = MINIMAL;
 static short scoring = ALPHA;
 static float* scoring_factors = NULL;
-static float* scoring_factors_local = NULL;
+static float* scoring_factors_local_intm = NULL;
+static float* scoring_factors_local_dest = NULL;
 
 /*Routing Implementation Declarations*/
 static Connection dfdally_minimal_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id);
@@ -1315,7 +1316,7 @@ static int dfdally_get_assigned_router_id_from_terminal(const dragonfly_param *p
 }
     
 /* Apply additional adjustments to the scores beyond vc/queue occupancies. */
-static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, tw_lp *lp, conn_minimality_t c_minimality, int score, bool is_global_adaptive)
+static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, tw_lp *lp, conn_minimality_t c_minimality, int score, bool is_global_adaptive, int group_code)
 {
     int port = conn.port;
     /* Do nothing if we're doing DELTA scoring. DELTA has a pre-applied
@@ -1343,16 +1344,31 @@ static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, ter
             new_score = score * scoring_factors[vcg] * -1;
         }
     }
-    else if (!is_global_adaptive && scoring_factors_local != NULL)
+    else if (!is_global_adaptive)
     { // this is a local adaptive decision and the intra-group scoring factors are set
-        if(scoring_factors_local[vcg] > 0 && c_minimality == C_NONMIN)
+        if (group_code == 1  && scoring_factors_local_intm != NULL)
         {
-            // if the factor is >0, then bias towards minimal by increasing the non-minimal score
-            new_score = score * scoring_factors_local[vcg];
-        } else if(scoring_factors_local[vcg] < 0 && c_minimality == C_MIN)
+            if(scoring_factors_local_intm[vcg] > 0 && c_minimality == C_NONMIN)
+            {
+                // if the factor is >0, then bias towards minimal by increasing the non-minimal score
+                new_score = score * scoring_factors_local_intm[vcg];
+            } else if(scoring_factors_local_intm[vcg] < 0 && c_minimality == C_MIN)
+            {
+                // if the factor is <0, then bias towards non-minimal by increasing the minimal score
+                new_score = score * scoring_factors_local_intm[vcg] * -1;
+            }
+        }
+        else if (group_code == 2  && scoring_factors_local_dest != NULL)
         {
-            // if the factor is <0, then bias towards non-minimal by increasing the minimal score
-            new_score = score * scoring_factors_local[vcg] * -1;
+            if(scoring_factors_local_dest[vcg] > 0 && c_minimality == C_NONMIN)
+            {
+                // if the factor is >0, then bias towards minimal by increasing the non-minimal score
+                new_score = score * scoring_factors_local_dest[vcg];
+            } else if(scoring_factors_local_dest[vcg] < 0 && c_minimality == C_MIN)
+            {
+                // if the factor is <0, then bias towards non-minimal by increasing the minimal score
+                new_score = score * scoring_factors_local_dest[vcg] * -1;
+            }
         }
     }
 
@@ -1807,7 +1823,8 @@ void dragonfly_print_params(const dragonfly_param *p, FILE * st)
 
     char tmp_str[20], min_bandwidth[60] = "", max_bandwidth[60] = "";
     char scoring_factors_str[60] = "";
-    char scoring_factors_local_str[60] = "";
+    char scoring_factors_local_intm_str[60] = "";
+    char scoring_factors_local_dest_str[60] = "";
     for(int i = 0; i < p->num_qos_levels; i ++)
     {
         sprintf(tmp_str, " %3d%% |", p->qos_min_bws[i]);
@@ -1818,9 +1835,13 @@ void dragonfly_print_params(const dragonfly_param *p, FILE * st)
             sprintf(tmp_str, " %.2f |", scoring_factors[i]);
             strcat(scoring_factors_str, tmp_str);
         }
-        if (scoring_factors_local != NULL){
-            sprintf(tmp_str, " %.2f |", scoring_factors_local[i]);
-            strcat(scoring_factors_local_str, tmp_str);
+        if (scoring_factors_local_intm != NULL){
+            sprintf(tmp_str, " %.2f |", scoring_factors_local_intm[i]);
+            strcat(scoring_factors_local_intm_str, tmp_str);
+        }
+        if (scoring_factors_local_dest != NULL){
+            sprintf(tmp_str, " %.2f |", scoring_factors_local_dest[i]);
+            strcat(scoring_factors_local_dest_str, tmp_str);
         }
     }
 
@@ -1864,8 +1885,10 @@ void dragonfly_print_params(const dragonfly_param *p, FILE * st)
     fprintf(st,"\tqos_max_bws =            |%s\n",max_bandwidth);
     if (scoring_factors != NULL)
         fprintf(st,"\troute_scoring_factors =  |%s\n",scoring_factors_str);
-    if (scoring_factors_local != NULL)
-        fprintf(st,"\troute_scoring_factors_local =  |%s\n",scoring_factors_local_str);
+    if (scoring_factors_local_intm != NULL)
+        fprintf(st,"\troute_scoring_factors_local_intm =  |%s\n",scoring_factors_local_intm_str);
+    if (scoring_factors_local_dest != NULL)
+        fprintf(st,"\troute_scoring_factors_local_dest =  |%s\n",scoring_factors_local_dest_str);
     fprintf(st,"------------------------------------------------------\n\n");
 
 }
@@ -2172,28 +2195,58 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
             }
         }
     }
-    char scoring_factors_local_str[MAX_NAME_LENGTH];
-    rc = configuration_get_value(&config, "PARAMS", "route_scoring_factors_local", anno, scoring_factors_local_str, MAX_NAME_LENGTH);
+    char scoring_factors_local_intm_str[MAX_NAME_LENGTH];
+    rc = configuration_get_value(&config, "PARAMS", "route_scoring_factors_local_intm", anno, scoring_factors_local_intm_str, MAX_NAME_LENGTH);
     if(rc) {
         if (scoring == DELTA) {
-            fprintf(stderr, "Ignoring route_scoring_factors_local parameter since route_scoring_metric=DELTA. Use another route_scoring_metric (ALPHA, EPSILON, or ZETA) if you want to manually specify routing bias factors.\n");
+            fprintf(stderr, "Ignoring route_scoring_factors_local_intm parameter since route_scoring_metric=DELTA. Use another route_scoring_metric (ALPHA, EPSILON, or ZETA) if you want to manually specify routing bias factors.\n");
         }
         else if (routing == MINIMAL || routing == NON_MINIMAL) {
-            fprintf(stderr, "Ignoring route_scoring_factors_local parameter since the routing algorithm is minimal or non-minimal.\n");
+            fprintf(stderr, "Ignoring route_scoring_factors_local_intm parameter since the routing algorithm is minimal or non-minimal.\n");
         }
         else {
-            scoring_factors_local = (float*)calloc(p->num_qos_levels, sizeof(float));
+            scoring_factors_local_intm = (float*)calloc(p->num_qos_levels, sizeof(float));
 
             /* Initialize to the default routing biases */
             for(int i = 0; i < p->num_qos_levels; i++)
-                scoring_factors_local[i] = 1;
+                scoring_factors_local_intm[i] = 1;
 
             char * token;
-            token = strtok(scoring_factors_local_str, ",");
+            token = strtok(scoring_factors_local_intm_str, ",");
             int i = 0;
             while(token != NULL)
             {
-                sscanf(token, "%f", &(scoring_factors_local[i]));
+                sscanf(token, "%f", &(scoring_factors_local_intm[i]));
+
+                i++;
+                if(i == p->num_qos_levels)
+                    break;
+                token = strtok(NULL,",");
+            }
+        }
+    }
+    char scoring_factors_local_dest_str[MAX_NAME_LENGTH];
+    rc = configuration_get_value(&config, "PARAMS", "route_scoring_factors_local_dest", anno, scoring_factors_local_dest_str, MAX_NAME_LENGTH);
+    if(rc) {
+        if (scoring == DELTA) {
+            fprintf(stderr, "Ignoring route_scoring_factors_local_dest parameter since route_scoring_metric=DELTA. Use another route_scoring_metric (ALPHA, EPSILON, or ZETA) if you want to manually specify routing bias factors.\n");
+        }
+        else if (routing == MINIMAL || routing == NON_MINIMAL) {
+            fprintf(stderr, "Ignoring route_scoring_factors_local_dest parameter since the routing algorithm is minimal or non-minimal.\n");
+        }
+        else {
+            scoring_factors_local_dest = (float*)calloc(p->num_qos_levels, sizeof(float));
+
+            /* Initialize to the default routing biases */
+            for(int i = 0; i < p->num_qos_levels; i++)
+                scoring_factors_local_dest[i] = 1;
+
+            char * token;
+            token = strtok(scoring_factors_local_dest_str, ",");
+            int i = 0;
+            while(token != NULL)
+            {
+                sscanf(token, "%f", &(scoring_factors_local_dest[i]));
 
                 i++;
                 if(i == p->num_qos_levels)
@@ -7355,9 +7408,9 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         int min_score = dfdally_score_connection(s, bf, msg, lp, best_min_conn, C_MIN);
         int nonmin_score = dfdally_score_connection(s, bf, msg, lp, best_nonmin_conn, C_NONMIN);
 
-        // Apply bias and score adjustments, if applicable
-        min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, false);
-        nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, false);
+        // Apply bias and score adjustments, if applicable. Last parameter group_code = 2 (dest group)
+        min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, false, 2);
+        nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, false, 2);
 
         if(min_score <= nonmin_score)
             return best_min_conn;
@@ -7439,13 +7492,19 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
     // Check if this is local adaptive or global adaptive decision. At this point in the function, 
     //  only global decisions in the source group and local decisions in the intermediate group should be handled.
+    int group_code = 0;  // group_code: 0 - source group, 1 - intermediate group,  2 - destination group
     bool is_global_adaptive = true;
-    if (my_group_id == msg->intm_grp_id && msg->last_hop == GLOBAL)
-        is_global_adaptive = false;
+    if (my_group_id == msg->intm_grp_id) {
+        group_code = 1;
 
-    min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, is_global_adaptive);
-    nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, is_global_adaptive);
+        if (msg->last_hop == GLOBAL)
+            is_global_adaptive = false;
+    }
 
+    min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, is_global_adaptive, group_code);
+    nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, is_global_adaptive, group_code);
+
+    // KEV TODO test with this only for global. Now it's affecting both global decision and local intermediate group decisions.
     bool upper_threshold_exceeded = false;
     if (exceed_adaptive_upper_threshold(s, bf, msg, best_min_conn, C_MIN) == true &&
             exceed_adaptive_upper_threshold(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){ // if buffer are over capacity
