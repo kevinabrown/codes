@@ -3129,7 +3129,7 @@ void nw_test_event_handler_commit(nw_state* s, tw_bf * bf, nw_message * m, tw_lp
 
                     char tag_line[32];
                     int written;
-                    written = sprintf(tag_line, "%d %d %.5f\n",s->nw_id, m->mpi_op->u.send.tag, m->rc.saved_marker_time);
+                    written = sprintf(tag_line, "%lu %d %.5f\n",s->nw_id, m->mpi_op->u.send.tag, m->rc.saved_marker_time);
                     lp_io_write(lp->gid, marker_filename, written, tag_line);
                 }
             }
