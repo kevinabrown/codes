@@ -186,6 +186,7 @@ static FILE * dragonfly_term_pk_log = NULL;
 static FILE * dragonfly_rtr_rtg_log = NULL;
 static FILE * dragonfly_route_score_log = NULL;
 //static FILE * dragonfly_term_bw_log = NULL;
+static long term_log_timestamp, rtr_log_timestamp;
 
 static int sample_bytes_written = 0;
 static int sample_rtr_bytes_written = 0;
@@ -3935,6 +3936,8 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
     s->terminal_available_time = (tw_stime*)calloc(p->num_rails, sizeof(tw_stime));
     s->packet_counter = 0;
 
+    /* Todo - timestamp may not correct for parallel-runs */
+    term_log_timestamp = (long)time(NULL);
 
     if(s->terminal_id == 0)
     {
@@ -3958,14 +3961,24 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         g_minimal_count = (long*)calloc(num_qos_levels, sizeof(long));
         g_nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
 
+	    tw_output(lp, "\n PID term-myprocid-%lu-%ld-%ld ",  g_tw_mynode, (long)getpid(), term_log_timestamp); // Record pid at the start of the simulation.
+
 #if PRINT_MSG_TIMES == 1
         char rdfdally_filename[64];
-        sprintf(rdfdally_filename, "rdfdally.out-%lu-%ld", g_tw_mynode, (long)getpid());
+        sprintf(rdfdally_filename, "rdfdally.out-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), term_log_timestamp);
         rdfdally_file = fopen(rdfdally_filename, "w");
         fprintf(rdfdally_file, "time destination source qosclass num.g.hops num.l.hops nm.sgrp nm.igrp nm.dgrp latency router.queue.time");
 #endif
-	tw_output(lp, "\n PID myprocid-%lu-%ld ",  g_tw_mynode, (long)getpid()); // Record pid at the start of the simulation.
     }
+    #if DEBUG_QOS_T == 1
+    char term_pk_log[128];
+    sprintf(term_pk_log, "terminal-packet-stats-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), term_log_timestamp);
+    if(dragonfly_term_pk_log == NULL)
+    {
+        dragonfly_term_pk_log = fopen(term_pk_log, "w+");
+        fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max");
+    }
+    #endif
  
     s->packet_gen = (long*)calloc(num_qos_levels, sizeof(long));
     s->packet_fin = (long*)calloc(num_qos_levels, sizeof(long));
@@ -4139,8 +4152,13 @@ void router_dally_init(router_state * r, tw_lp * lp)
     r->plane_id = r->router_id / p->num_routers_per_plane;
     r->group_id=r->router_id/p->num_routers;
     
+    /* Todo - timestamp and opening of logs may not safe for parallel runs */
+    rtr_log_timestamp = (long)time(NULL);
+    if(r->router_id == 0)
+        tw_output(lp, "\n PID router-myprocid-%lu-%ld-%ld ",  g_tw_mynode, (long)getpid(), rtr_log_timestamp); // Record pid at the start of the simulation
+    
     char rtr_bw_log[128];
-    sprintf(rtr_bw_log, "router-bw-tracker-%lu-%ld", g_tw_mynode, (long)getpid());
+    sprintf(rtr_bw_log, "router-bw-tracker-%lu-%ld-%ld", g_tw_mynode, (long)getpid(), rtr_log_timestamp);
 
     if(dragonfly_rtr_bw_log == NULL && ROUTER_BW_LOG)
     {
@@ -4150,7 +4168,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     }
     #if DEBUG_QOS_R == 1
     char net_pk_log[128];
-    sprintf(net_pk_log, "network-packet-stats-%lu-%ld", g_tw_mynode, (long)getpid());
+    sprintf(net_pk_log, "network-packet-stats-%lu-%ld-%ld", g_tw_mynode, (long)getpid(), rtr_log_timestamp);
     if(dragonfly_net_pk_log == NULL)
     {
         dragonfly_net_pk_log = fopen(net_pk_log, "w+");
@@ -4159,17 +4177,10 @@ void router_dally_init(router_state * r, tw_lp * lp)
         //fprintf(dragonfly_net_pk_log, "\n time-stamp qos-level avg-chunk-latency max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks");
     }
     #endif
-    char term_pk_log[128];
-    sprintf(term_pk_log, "terminal-packet-stats-%lu-%ld", g_tw_mynode, (long)getpid());
-    if(dragonfly_term_pk_log == NULL)
-    {
-        dragonfly_term_pk_log = fopen(term_pk_log, "w+");
-        fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max");
-    }
     #if DEBUG_ROUTING_DECISION == 1
     /* Todo: This file could be appended to router-bw-tracker-, but I don't want to redo my analysis scripts for router-bw-tracker- at the moment. - Kevin Brown */
     char rtr_rtg_log[128];
-    sprintf(rtr_rtg_log, "router-routing-stats-%lu-%ld", g_tw_mynode, (long)getpid());
+    sprintf(rtr_rtg_log, "router-routing-stats-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), rtr_log_timestamp);
     if(dragonfly_rtr_rtg_log == NULL)
     {
         dragonfly_rtr_rtg_log = fopen(rtr_rtg_log, "w+");
@@ -4178,7 +4189,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     #endif
     #if DEBUG_ROUTING_SCORE == 1
     char rtr_scr_log[128];
-    sprintf(rtr_scr_log, "router-scoring-sample-%lu-%ld", g_tw_mynode, (long)getpid());
+    sprintf(rtr_scr_log, "router-scoring-sample-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), rtr_log_timestamp);
     if(dragonfly_route_score_log == NULL)
     {
         dragonfly_route_score_log = fopen(rtr_scr_log, "w+");
@@ -5709,6 +5720,12 @@ dragonfly_dally_terminal_final( terminal_state * s,
     lp_io_write(lp->gid, (char*)"dragonfly-cn-stats", written, s->output_buf2); 
 
 
+    #if DEBUG_QOS_T == 1
+    if(s->terminal_id == 0)
+    {
+        fclose(dragonfly_term_pk_log);
+    }
+    #endif
     //if(s->packet_gen != s->packet_fin)
     //    printf("\n generated %d finished %d ", s->packet_gen, s->packet_fin);
    
