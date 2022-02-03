@@ -3961,9 +3961,9 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
         g_minimal_count = (long*)calloc(num_qos_levels, sizeof(long));
         g_nonmin_count = (long*)calloc(num_qos_levels, sizeof(long));
 
-	    tw_output(lp, "\n PID term-myprocid-%lu-%ld-%ld ",  g_tw_mynode, (long)getpid(), term_log_timestamp); // Record pid at the start of the simulation.
-
 #if PRINT_MSG_TIMES == 1
+        tw_output(lp, "\n DEBUG-MSG-LOG-SUFFIX %lu-%ld-%ld \n",  g_tw_mynode, (long)getpid(), term_log_timestamp); // Record pid and timestamp of terminal DEBUG logs
+
         char rdfdally_filename[64];
         sprintf(rdfdally_filename, "rdfdally.out-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), term_log_timestamp);
         rdfdally_file = fopen(rdfdally_filename, "w");
@@ -3971,6 +3971,9 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
 #endif
     }
     #if DEBUG_QOS_T == 1
+    if(s->terminal_id == 0)
+        tw_output(lp, "\n DEBUG-TERM-LOG-SUFFIX %lu-%ld-%ld \n",  g_tw_mynode, (long)getpid(), term_log_timestamp); // Record pid and timestamp of terminal DEBUG logs
+
     char term_pk_log[128];
     sprintf(term_pk_log, "terminal-packet-stats-%lu-%ld-%ld",  g_tw_mynode, (long)getpid(), term_log_timestamp);
     if(dragonfly_term_pk_log == NULL)
@@ -4154,8 +4157,6 @@ void router_dally_init(router_state * r, tw_lp * lp)
     
     /* Todo - timestamp and opening of logs may not safe for parallel runs */
     rtr_log_timestamp = (long)time(NULL);
-    if(r->router_id == 0)
-        tw_output(lp, "\n PID router-myprocid-%lu-%ld-%ld ",  g_tw_mynode, (long)getpid(), rtr_log_timestamp); // Record pid at the start of the simulation
     
     char rtr_bw_log[128];
     sprintf(rtr_bw_log, "router-bw-tracker-%lu-%ld-%ld", g_tw_mynode, (long)getpid(), rtr_log_timestamp);
@@ -4167,6 +4168,9 @@ void router_dally_init(router_state * r, tw_lp * lp)
         fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent vc-occupancy queued-count_per-port"); // Kevin Bronw: Added VC occupancy during routing+qos study 2021/05/31
     }
     #if DEBUG_QOS_R == 1
+    if (r->router_id == 0)
+        tw_output(lp, "\n DEBUG-RTR-LOG-SUFFIX %lu-%ld-%ld \n",  g_tw_mynode, (long)getpid(), rtr_log_timestamp); // Record pid and timestamp of router DEBUG logs
+
     char net_pk_log[128];
     sprintf(net_pk_log, "network-packet-stats-%lu-%ld-%ld", g_tw_mynode, (long)getpid(), rtr_log_timestamp);
     if(dragonfly_net_pk_log == NULL)
@@ -5650,6 +5654,7 @@ void
 dragonfly_dally_terminal_final( terminal_state * s, 
       tw_lp * lp )
 {
+
     dragonfly_num_qos_levels = s->params->num_qos_levels;
     // printf("terminal id %d\n",s->terminal_id);
     
