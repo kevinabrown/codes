@@ -65,7 +65,7 @@
 // maximum number of characters allowed to represent the routing algorithm as a string
 #define MAX_ROUTING_CHARS 32
 
-#define ROUTER_BW_LOG 0
+#define ROUTER_BW_LOG 1
 
 #define OUTPUT_END_END_LATENCIES 0
 #define OUTPUT_PORT_PORT_LATENCIES 0
@@ -491,6 +491,7 @@ struct terminal_state
     int workloads_finished_flag;
 
     int** vc_occupancy; // vc_occupancies [rail_id][qos_level]
+    int** downstream_credit; // downstream_credit [rail_id][qos_level]
     tw_stime* terminal_available_time; // [rail_id]
     terminal_dally_message_list ***terminal_msgs; //[rail_id][qos_level]
     terminal_dally_message_list ***terminal_msgs_tail; //[rail_id][qos_level]
@@ -607,6 +608,8 @@ struct router_state
     double* port_bandwidths; //used by CC
     int* vc_max_sizes; //max for vc sizes indexed by port
     int** vc_occupancy;
+    int** downstream_credit; // downstream_credit [rail_id][qos_level]
+    int** voq_occupancy;
     int64_t* link_traffic;
     int64_t * link_traffic_sample;
 
@@ -1452,7 +1455,8 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
     */
 
     // Using only the occupancy of vc0 to determine if port is congested (since some other VCs are lightly used.
-    vc_score = s->vc_occupancy[port][base_vc + 0];
+    //vc_score = s->vc_occupancy[port][base_vc + 0];  // KBEdit INPUT port would be used here
+    vc_score = s->voq_occupancy[port][base_vc + 0];
     peak_allocation = vc_size;
     float pct_occupied = ( (float)vc_score/(float)peak_allocation ) * 100;
     if (peak_allocation > 0 &&
@@ -1479,9 +1483,10 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
         case ALPHA: //considers vc occupancy and queued count only
             for(int k=0; k < s->params->num_vcs; k++)
             {
-                score += s->vc_occupancy[port][k];
+                score += s->voq_occupancy[port][k];
+                //score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         case BETA: //considers vc occupancy and queued count multiplied by the number of minimal hops to destination from the potential next stop
             tw_error(TW_LOC, "Beta scoring not implemented");
@@ -1492,9 +1497,10 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
         case DELTA: //alpha but biased 2:1 toward minimal
             for(int k=0; k < s->params->num_vcs; k++)
             {
-                score += s->vc_occupancy[port][k];
+                score += s->voq_occupancy[port][k];
+                //score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
 
             if (c_minimality != C_MIN)
                 score = score * 2;
@@ -1502,16 +1508,18 @@ static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_m
         case EPSILON: // consider queue count and the occupancy of my vc and higher priority vcs only
             for(int k = 0; k < base_vc + vcs_per_qos; k++)
             {
-                score += s->vc_occupancy[port][k];
+                score += s->voq_occupancy[port][k];
+                //score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         case ZETA: // consider queue count and the occupancy of my vc only
             for(int k = base_vc; k < base_vc + vcs_per_qos; k++)
             {
-                score += s->vc_occupancy[port][k];
+                score += s->voq_occupancy[port][k];
+                //score += s->vc_occupancy[port][k];
             }
-            score += s->queued_count[port];
+            //score += s->queued_count[port];
             break;
         default:
             tw_error(TW_LOC, "Unsupported Scoring Protocol Error\n");
@@ -3097,8 +3105,8 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
 
             if(dragonfly_rtr_bw_log != NULL && ROUTER_BW_LOG)
             {
-                if(s->qos_green_total[i][j] > 0 || s->qos_yellow_total[i][j] > 0 || s->qos_red_total[i][j] > 0 || s->qos_data[i][j] > 0)
-                {
+                //if(s->qos_green_total[i][j] > 0 || s->qos_yellow_total[i][j] > 0 || s->qos_red_total[i][j] > 0 || s->qos_data[i][j] > 0)
+                //{
                     fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %f %d %d %f %d %d %d %d %d %d", 
                             s->router_id, tw_now(lp), i, j, bw_consumed, s->qos_status[i][j], s->qos_data[i][j], s->busy_time_sample[i], 
                             s->qos_green_total[i][j], s->qos_green_sent[i][j], 
@@ -3106,16 +3114,24 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
                             s->qos_red_total[i][j], s->qos_red_sent[i][j]);
                     
                     // print colon-delimited per-VC vc_occupancy values for this class
-                    fprintf(dragonfly_rtr_bw_log, " %d", s->vc_occupancy[i][base_limit]);
+                    fprintf(dragonfly_rtr_bw_log, " %d", s->voq_occupancy[i][base_limit]);
+                    //fprintf(dragonfly_rtr_bw_log, " %d", s->vc_occupancy[i][base_limit]);
                     for(int k = base_limit+1; k < base_limit + vcs_per_qos; k ++)
-                        fprintf(dragonfly_rtr_bw_log, ":%d", s->vc_occupancy[i][k]);
+                        fprintf(dragonfly_rtr_bw_log, ":%d", s->voq_occupancy[i][k]);
+                        //fprintf(dragonfly_rtr_bw_log, ":%d", s->vc_occupancy[i][k]);
 
                     // queued_count is per port, NOT class. It's printed with class zero's record, but it's not specific to class zero.
-                    if (j == 0)
+                    /*if (j == 0)
                         fprintf(dragonfly_rtr_bw_log, " %d", s->queued_count[i]);
                     else
                         fprintf(dragonfly_rtr_bw_log, " 0");
-                }
+                    */
+
+                    // Print downstream credits
+                    fprintf(dragonfly_rtr_bw_log, " %d", s->downstream_credit[i][base_limit]);
+                    for(int k = base_limit+1; k < base_limit + vcs_per_qos; k ++)
+                        fprintf(dragonfly_rtr_bw_log, ":%d", s->downstream_credit[i][k]);
+                //}
             }
         }
     }
@@ -3199,7 +3215,8 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
     /* If there's a single class, return it's VC */
     if(num_qos_levels == 1)
     {
-        if(s->terminal_msgs[rail_id][0] == NULL || s->vc_occupancy[rail_id][0] + s->params->chunk_size > s->params->cn_vc_size)
+        //if(s->terminal_msgs[rail_id][0] == NULL || s->vc_occupancy[rail_id][0] + s->params->chunk_size > s->params->cn_vc_size)
+        if(s->terminal_msgs[rail_id][0] == NULL || s->downstream_credit[rail_id][0] < s->params->chunk_size)
             return -1;
         else
             return 0;
@@ -3223,7 +3240,8 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
             // Update token buckets with newly accumulated tokens /
             update_accumulated_tokens(tw_now(lp), s, rail_id, k);
 
-            if(s->terminal_msgs[rail_id][k] != NULL && s->vc_occupancy[rail_id][k] + s->params->chunk_size <= s->params->cn_vc_size)
+            //if(s->terminal_msgs[rail_id][k] != NULL && s->vc_occupancy[rail_id][k] + s->params->chunk_size <= s->params->cn_vc_size)
+            if(s->terminal_msgs[rail_id][k] != NULL && s->downstream_credit[rail_id][k] >= s->params->chunk_size)
             {
                 // The class is red if there are no token in the max (peak) rate bucket /
                 if(s->qos_max_token_count[rail_id][k] < 1.0f)
@@ -3279,7 +3297,8 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
     /* All vcgs are exceeding their bandwidth limits*/
     for(int i = 0; i < num_qos_levels; i++)
     {
-        if(s->terminal_msgs[rail_id][i] != NULL && s->vc_occupancy[rail_id][i] + s->params->chunk_size <= s->params->cn_vc_size)
+        //if(s->terminal_msgs[rail_id][i] != NULL && s->vc_occupancy[rail_id][i] + s->params->chunk_size <= s->params->cn_vc_size)
+        if(s->terminal_msgs[rail_id][i] != NULL && s->downstream_credit[rail_id][i] >= s->params->chunk_size)
         {
             bf->c2 = 1;
             
@@ -3379,8 +3398,25 @@ static int get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_message *
     return -1;
 }
 
-static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
+inline static bool is_downsteam_credit_available(
+        router_state * s, 
+        int output_port, 
+        int output_chan,
+        int required_amount)
 {
+    terminal_dally_message_list *entry = NULL;
+    entry = s->pending_msgs[output_port][output_chan];
+    
+    if(s->downstream_credit[output_port][entry->msg.downstream_chan] >= required_amount)
+        return true;
+
+    return false;
+}
+
+static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
+{ 
+    terminal_dally_message_list *entry = NULL;
+
     int num_qos_levels = s->params->num_qos_levels;
 
     int vcs_per_qos = s->params->num_vcs / num_qos_levels;
@@ -3515,41 +3551,47 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
         // Return the first VC with traffic from the green class
         if(first_green >= 0)
         {
-            int i = first_green / vcs_per_qos;
-            s->qos_min_token_count[output_port][i] -= 1.0f;
-            if(s->qos_max_token_count[output_port][i] >= 1.0f)
-                s->qos_max_token_count[output_port][i] -= 1.0f;
+            if(is_downsteam_credit_available(s, output_port, first_green, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
+            {
+                int i = first_green / vcs_per_qos;
+                s->qos_min_token_count[output_port][i] -= 1.0f;
+                if(s->qos_max_token_count[output_port][i] >= 1.0f)
+                    s->qos_max_token_count[output_port][i] -= 1.0f;
 
-            #if DEBUG_QOS == 1
-            s->qos_green_sent[output_port][i]++;
-            #endif
-            #if DEBUG_QOS_X == 1
-            printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_GREEN)\n", tw_now(lp),
-                    s->router_id, output_port, i, first_green);
+                #if DEBUG_QOS == 1
+                s->qos_green_sent[output_port][i]++;
+                #endif
+                #if DEBUG_QOS_X == 1
+                printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_GREEN)\n", tw_now(lp),
+                        s->router_id, output_port, i, first_green);
 
-            #endif
+                #endif
 
-            assert(s->qos_min_token_count[output_port][i] >= 0.0);
-            assert(s->qos_max_token_count[output_port][i] >= 0.0);
+                assert(s->qos_min_token_count[output_port][i] >= 0.0);
+                assert(s->qos_max_token_count[output_port][i] >= 0.0);
 
-            return first_green;
+                return first_green;
+            }
         }
         else if(first_yellow >= 0)
         {
-            int i = first_yellow / vcs_per_qos;
-            s->qos_max_token_count[output_port][i] -= 1.0f;
+            if(is_downsteam_credit_available(s, output_port, first_yellow, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
+            {
+                int i = first_yellow / vcs_per_qos;
+                s->qos_max_token_count[output_port][i] -= 1.0f;
 
-            #if DEBUG_QOS == 1
-            s->qos_yellow_sent[output_port][i]++;
-            #endif
-            #if DEBUG_QOS_X == 1
-            printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_YELLOW)\n", tw_now(lp),
-                    s->router_id, output_port, i, first_yellow);
-            #endif
+                #if DEBUG_QOS == 1
+                s->qos_yellow_sent[output_port][i]++;
+                #endif
+                #if DEBUG_QOS_X == 1
+                printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_YELLOW)\n", tw_now(lp),
+                        s->router_id, output_port, i, first_yellow);
+                #endif
 
-            assert(s->qos_max_token_count[output_port][i] >= 0.0);
+                assert(s->qos_max_token_count[output_port][i] >= 0.0);
 
-            return first_yellow;
+                return first_yellow;
+            }
         }
         /*
         for(int i = 0; i < num_qos_levels; i++)
@@ -3599,20 +3641,23 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
             #endif
             if(s->pending_msgs[output_port][k] != NULL)
             {
-                #if DEBUG_QOS_X == 1
-                printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (sent-RED)\n", tw_now(lp), 
-                        s->router_id, output_port, next_rr_vcg, k);
-                #endif
+                if(is_downsteam_credit_available(s, output_port, k, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
+                {
+                    #if DEBUG_QOS_X == 1
+                    printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (sent-RED)\n", tw_now(lp), 
+                            s->router_id, output_port, next_rr_vcg, k);
+                    #endif
 
-                #if DEBUG_QOS == 1 
-                s->qos_red_sent[output_port][next_rr_vcg]++;
-                #endif
+                    #if DEBUG_QOS == 1 
+                    s->qos_red_sent[output_port][next_rr_vcg]++;
+                    #endif
 
-                if(msg->last_saved_qos < 0)
-                    msg->last_saved_qos = s->last_qos_lvl[output_port];  // Is this correct for RC KBEDIT
+                    if(msg->last_saved_qos < 0)
+                        msg->last_saved_qos = s->last_qos_lvl[output_port];  // Is this correct for RC KBEDIT
 
-                s->last_qos_lvl[output_port] = next_rr_vcg;
-                return k;
+                    s->last_qos_lvl[output_port] = next_rr_vcg;
+                    return k;
+                }
             }
         }
         next_rr_vcg = (next_rr_vcg + 1) % num_qos_levels;
@@ -4018,6 +4063,7 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
     rc_stack_create(&s->st);
     rc_stack_create(&s->cc_st);
     s->vc_occupancy = (int**)calloc(p->num_rails, sizeof(int*)); //1 vc times the number of qos levels
+    s->downstream_credit = (int**)calloc(p->radix , sizeof(int*));
     s->last_buf_full = (tw_stime*)calloc(p->num_rails, sizeof(tw_stime));
 
     s->terminal_length = (int**)calloc(p->num_rails, sizeof(int*)); //1 vc times number of qos levels
@@ -4025,6 +4071,7 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
     for(i = 0; i < p->num_rails; i++)
     {
         s->vc_occupancy[i]= (int*)calloc(num_qos_levels, sizeof(int));
+        s->downstream_credit[i] = (int*)calloc(p->num_vcs, sizeof(int)); // Allocated based on downstream router
         s->terminal_length[i]= (int*)calloc(num_qos_levels, sizeof(int));
     }
 
@@ -4055,6 +4102,8 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
             s->terminal_msgs[i][j] = NULL;
             s->terminal_msgs_tail[i][j] = NULL;
         }
+        for(int j = 0; j < p->num_vcs; j++) 
+            s->downstream_credit[i][j] = p->cn_vc_size;
 
         /* Whether the virtual channel group is active or over-bw*/
         s->qos_status[i] = (int*)calloc(num_qos_levels, sizeof(int));
@@ -4249,6 +4298,8 @@ void router_dally_init(router_state * r, tw_lp * lp)
     r->workloads_finished_flag = 0;
 
     r->vc_occupancy = (int**)calloc(p->radix , sizeof(int*));
+    r->voq_occupancy = (int**)calloc(p->radix , sizeof(int*));
+    r->downstream_credit = (int**)calloc(p->radix , sizeof(int*));
     r->in_send_loop = (int*)calloc(p->radix, sizeof(int));
     r->qos_data = (int**)calloc(p->radix, sizeof(int*));
     r->last_qos_lvl = (int*)calloc(p->radix, sizeof(int));
@@ -4322,6 +4373,8 @@ void router_dally_init(router_state * r, tw_lp * lp)
         r->queued_count[i] = 0;    
         r->in_send_loop[i] = 0;
         r->vc_occupancy[i] = (int*)calloc(p->num_vcs, sizeof(int));
+        r->voq_occupancy[i] = (int*)calloc(p->num_vcs, sizeof(int));
+        r->downstream_credit[i] = (int*)calloc(p->num_vcs, sizeof(int));
     //    printf("\n Number of vcs %d for radix %d ", p->num_vcs, p->radix);
         r->pending_msgs[i] = (terminal_dally_message_list**)calloc(p->num_vcs, 
             sizeof(terminal_dally_message_list*));
@@ -4366,6 +4419,13 @@ void router_dally_init(router_state * r, tw_lp * lp)
         }
         for(int j = 0; j < p->num_vcs; j++) 
         {
+            if(i < p->intra_grp_radix)
+                r->downstream_credit[i][j] = p->local_vc_size;
+            else if(i < p->intra_grp_radix + p->num_global_channels)
+                r->downstream_credit[i][j] = p->global_vc_size;
+            else
+                r->downstream_credit[i][j] = p->cn_vc_size;
+
             r->pending_msgs[i][j] = NULL;
             r->pending_msgs_tail[i][j] = NULL;
             r->queued_msgs[i][j] = NULL;
@@ -4813,6 +4873,9 @@ static void packet_generate(terminal_state * s, tw_bf * bf, terminal_dally_messa
     msg->my_g_hop = 0;
     msg->my_hops_cur_group = 0;
 
+    int vcs_per_qos = s->params->num_vcs / num_qos_levels;
+    int downstream_chan = vcs_per_qos * vcg;
+    assert(downstream_chan < s->params->num_vcs);
 
 
     for(int i = 0; i < num_chunks; i++)
@@ -4839,6 +4902,7 @@ static void packet_generate(terminal_state * s, tw_bf * bf, terminal_dally_messa
 
         cur_chunk->msg.rail_id = msg->rail_id;
         cur_chunk->msg.output_chan = vcg;
+        cur_chunk->msg.downstream_chan = downstream_chan;
         cur_chunk->msg.chunk_id = i;
         cur_chunk->msg.origin_router_id = s->router_id[msg->rail_id];
         append_to_terminal_dally_message_list(s->terminal_msgs[msg->rail_id], s->terminal_msgs_tail[msg->rail_id],
@@ -5129,11 +5193,13 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
         tw_event_send(e_new);
     }
     
-    s->vc_occupancy[msg->rail_id][vcg] += s->params->chunk_size;
+    s->vc_occupancy[msg->rail_id][vcg] += data_size;
+    s->downstream_credit[msg->rail_id][vcg] -= s->params->chunk_size;
+    assert(s->downstream_credit[msg->rail_id][vcg] >= 0);
     cur_entry = return_head(s->terminal_msgs[msg->rail_id], s->terminal_msgs_tail[msg->rail_id], vcg); 
     rc_stack_push(lp, cur_entry, delete_terminal_dally_message_list, s->st);
-    s->terminal_length[msg->rail_id][vcg] -= s->params->chunk_size;
-    s->link_traffic[msg->rail_id] += s->params->chunk_size;
+    s->terminal_length[msg->rail_id][vcg] -= data_size;
+    s->link_traffic[msg->rail_id] += data_size;
     s->total_chunks[msg->rail_id]++;
     s->injected_chunks++; //TODO: if a terminal can inject packets from multiple jobs, it might be beneficial to make that matter here
 
@@ -5155,7 +5221,8 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
         cur_entry = s->terminal_msgs[msg->rail_id][next_vcg];
 
     /* if there is another packet inline then schedule another send event */
-    if(cur_entry != NULL && s->vc_occupancy[msg->rail_id][next_vcg] + s->params->chunk_size <= s->params->cn_vc_size) {
+    //if(cur_entry != NULL && s->vc_occupancy[msg->rail_id][next_vcg] + s->params->chunk_size <= s->params->cn_vc_size) {
+    if(cur_entry != NULL && s->downstream_credit[msg->rail_id][next_vcg] >= s->params->chunk_size) {
         terminal_dally_message *m_new;
         e = model_net_method_event_new(lp->gid, injection_ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY, (void**)&m_new, NULL);
         m_new->type = T_SEND;
@@ -5411,7 +5478,8 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     buf_msg->rail_id = msg->rail_id;
     buf_msg->vc_index = msg->vc_index;
     buf_msg->output_chan = msg->output_chan;
-    buf_msg->type = R_BUFFER;
+    buf_msg->downstream_chan = msg->downstream_chan;
+    buf_msg->type = R_BUFFER; // KBEdit - should we be returning credit immediately?
     tw_event_send(buf_e);
 
     bf->c1 = 0;
@@ -5629,12 +5697,14 @@ static void terminal_buf_update(terminal_state * s,
     int vcg = 0;
         
     int num_qos_levels = s->params->num_qos_levels;
+    int downstream_chan = msg->downstream_chan;
 
     if(num_qos_levels > 1)
         vcg = get_vcg_from_category(msg);
 
     tw_stime ts = 0;
-    s->vc_occupancy[msg->rail_id][vcg] -= s->params->chunk_size;
+    //s->vc_occupancy[msg->rail_id][vcg] -= s->params->chunk_size;
+    s->downstream_credit[msg->rail_id][downstream_chan] += s->params->chunk_size;
     
     if(s->in_send_loop[msg->rail_id] == 0 && s->terminal_msgs[msg->rail_id][vcg] != NULL) {
         terminal_dally_message *m;
@@ -5740,6 +5810,7 @@ dragonfly_dally_terminal_final( terminal_state * s,
     rc_stack_destroy(s->st);
     //TODO FREE THESE CORRECTLY
     free(s->vc_occupancy);
+    free(s->downstream_credit);
     free(s->terminal_msgs);
     free(s->terminal_msgs_tail);
 }
@@ -5762,10 +5833,10 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp){
     int i, j;
     for(i = 0; i < s->params->radix; i++) {
         for(j = 0; j < s->params->num_vcs; j++) {
-            if(s->queued_msgs[i][j] != NULL) {
+            /*if(s->queued_msgs[i][j] != NULL) {
                 printf("[%llu] leftover queued messages %d %d %d\n", LLU(lp->gid), i, j,
                 s->vc_occupancy[i][j]);
-            }
+            }*/
             if(s->pending_msgs[i][j] != NULL) {
                 printf("[%llu] lefover pending messages %d %d\n", LLU(lp->gid), i, j);
             }
@@ -6051,9 +6122,8 @@ static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dal
 
 /*When a packet is sent from the current router and a buffer slot becomes available, a credit is sent back to schedule another packet event*/
 static void router_credit_send(router_state * s, terminal_dally_message * msg, 
-  tw_lp * lp, int sq, short* rng_counter) {
+  tw_lp * lp, short* rng_counter, tw_stime ts, int transfer_size) {
     tw_event * buf_e;
-    tw_stime ts;
     terminal_dally_message * buf_msg;
 
     int dest = 0,  type = R_BUFFER;
@@ -6084,28 +6154,25 @@ static void router_credit_send(router_state * s, terminal_dally_message * msg,
      * the injection delay, and propagation delay of the channel. But this level of
      * granularity _may_ only be necessary for specific credit-based flow control
      * studies. It should certainly be considered for those studies. */
-    ts = credit_delay;
+    ts += credit_delay;
 
     if (is_terminal) {
-        buf_e = model_net_method_event_new(dest, ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY, 
+        buf_e = model_net_method_event_new(dest, ts + gen_noise(lp, rng_counter), lp, DRAGONFLY_DALLY, 
         (void**)&buf_msg, NULL);
         buf_msg->magic = terminal_magic_num;
     } 
     else {
-        buf_e = model_net_method_event_new(dest, ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY_ROUTER,
+        buf_e = model_net_method_event_new(dest, ts + gen_noise(lp, rng_counter), lp, DRAGONFLY_DALLY_ROUTER,
                 (void**)&buf_msg, NULL);
         buf_msg->magic = router_magic_num;
     }
     
+    buf_msg->packet_size = transfer_size;
     buf_msg->rail_id = msg->rail_id;
     buf_msg->origin_router_id = s->router_id;
-    if(sq == -1) {
-        buf_msg->vc_index = msg->vc_index;
-        buf_msg->output_chan = msg->output_chan;
-    } else {
-        buf_msg->vc_index = msg->saved_vc;
-        buf_msg->output_chan = msg->saved_channel;
-    }
+    buf_msg->vc_index = msg->prev_output_port;
+    buf_msg->output_chan = msg->prev_output_chan;
+    buf_msg->downstream_chan = msg->output_chan;
     strcpy(buf_msg->category, msg->category); 
     buf_msg->type = type;
 
@@ -6231,19 +6298,67 @@ static void router_packet_receive( router_state * s,
         next_stop = cur_chunk->msg.dest_terminal_lpid;
     }
 
-    //From here the output port is known and output_chan is determined shortly
+    //From here the current output port and channel are known, and downstream_output_chan is updated shortly
     assert(output_port >= 0);
+    cur_chunk->msg.prev_output_port = cur_chunk->msg.vc_index;
+    cur_chunk->msg.prev_output_chan = cur_chunk->msg.output_chan;
     cur_chunk->msg.vc_index = output_port;
+    cur_chunk->msg.output_chan = cur_chunk->msg.downstream_chan;
     cur_chunk->msg.next_stop = next_stop;
 
     // printf("Router %d: Output Port = %d      next stop = %d\n",s->router_id, output_port, next_stop);
 
-    int max_vc_size = s->params->cn_vc_size;
+//    int max_vc_size = s->params->cn_vc_size;
 
     int my_group_id = s->group_id;
     int src_group_id = msg->origin_router_id / num_routers;
     int dest_group_id = dest_router_id / num_routers;
 
+//    int input_port = cur_chunk->msg.downstream_port; // KBEdit - INPUT PORT used here
+    output_chan = cur_chunk->msg.output_chan;
+
+    // calulate downstream VC -  KBEdit: this should be a part of routing or a separte flow control component
+    int downstream_chan = output_chan - (vcg * vcs_per_qos);
+    if(next_stop_conn.conn_type == CONN_TERMINAL) // KBEdit: we should test for being on the destination router elsewhere? Should I test for being on the source router?
+    { // We are on the destination router; Assuming there is 1 vc buffer per qos class on terminal interfaces
+        downstream_chan = vcg;
+        assert(downstream_chan < num_qos_levels && downstream_chan >= 0);
+    }
+    else
+    {
+        if (next_stop_conn.conn_type == CONN_GLOBAL)
+        { // We are going into a new group. Increment the VC.
+            downstream_chan++;
+            assert(downstream_chan < vcs_per_qos);
+        }
+        else if (cur_chunk->msg.my_hops_cur_group > 1)
+        { // Otherwise, we are taking a local hop and it isn't our first in this group.
+            downstream_chan++;
+            assert(downstream_chan < vcs_per_qos);
+
+            #if PRINT_MSG_TIMES == 1
+            if (my_group_id == src_group_id)
+            { // we are in the source group
+                cur_chunk->msg.nm_sgrp++;
+                assert(cur_chunk->msg.nm_sgrp <= 1); // misroute twice in any group
+            }
+            else if (my_group_id == dest_group_id)
+            { // we are in the dst group, which is not the source group
+                cur_chunk->msg.nm_dgrp++;
+                assert(cur_chunk->msg.nm_dgrp <= 1); // misroute twice in any group
+            }
+            else
+            { // we are in the intermediate group
+                cur_chunk->msg.nm_igrp++;
+                assert(cur_chunk->msg.nm_igrp <= 1); // never misroute twice in any group
+            }
+            #endif
+        }
+
+        downstream_chan = downstream_chan + (vcg * vcs_per_qos);
+        assert(downstream_chan < s->params->num_vcs && downstream_chan >= 0);
+    }
+    /* KBEdit: remove since the local channel is determined before arrive on this router
     int prev_output_channel = cur_chunk->msg.output_chan - (vcg * vcs_per_qos); 
 
     output_chan = prev_output_channel;
@@ -6277,6 +6392,7 @@ static void router_packet_receive( router_state * s,
         }
         #endif
     }
+    */
 /*
     if (my_group_id == src_group_id)
     {
@@ -6294,6 +6410,23 @@ static void router_packet_receive( router_state * s,
         output_chan = 3;
     }
 */
+
+    // KBEdit These hops count should really be set before routing is done
+    if (next_stop_conn.conn_type == CONN_LOCAL)
+    {
+//        max_vc_size = s->params->local_vc_size;
+        cur_chunk->msg.my_l_hop++;
+        cur_chunk->msg.my_hops_cur_group++;
+
+        assert(cur_chunk->msg.my_hops_cur_group <= 2); //dfdally should not take more than 2 l_hops within a group
+    }
+    if (next_stop_conn.conn_type == CONN_GLOBAL)
+    {
+//        max_vc_size = s->params->global_vc_size;
+        cur_chunk->msg.my_hops_cur_group = 0; //reset this as it's going to a new group
+        cur_chunk->msg.my_g_hop++;
+    }
+    /* KBEdit - to be removed if we don't need these calculations.
     if (next_stop_conn.conn_type == CONN_LOCAL)
     {
         max_vc_size = s->params->local_vc_size;
@@ -6307,7 +6440,7 @@ static void router_packet_receive( router_state * s,
         max_vc_size = s->params->global_vc_size;
         cur_chunk->msg.my_hops_cur_group = 0; //reset this as it's going to a new group
         cur_chunk->msg.my_g_hop++;
-    }
+    }*/
 
     //this seemed outdated with current literature and was replaced with the scheme above.
     // output_chan = 0;
@@ -6334,12 +6467,8 @@ static void router_packet_receive( router_state * s,
     //     cur_chunk->msg.my_hops_cur_group = 0; //reset this as it's going to a new group
     //     cur_chunk->msg.my_g_hop++;
     // }
-        
-    assert(output_chan < vcs_per_qos);
-    output_chan = output_chan + (vcg * vcs_per_qos);
-    assert(output_chan < s->params->num_vcs && output_chan >= 0);
 
-    cur_chunk->msg.output_chan = output_chan;
+    cur_chunk->msg.downstream_chan = downstream_chan;
     cur_chunk->msg.my_N_hop++;
 
     if(output_port >= s->params->radix)
@@ -6358,6 +6487,35 @@ static void router_packet_receive( router_state * s,
         memcpy(cur_chunk->event_data, m_data_src, msg->remote_event_size_bytes);
     }
 
+    assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
+    append_to_terminal_dally_message_list(s->pending_msgs[output_port], s->pending_msgs_tail[output_port],
+                                            output_chan, cur_chunk);
+
+    int msg_size = s->params->chunk_size;
+    uint64_t num_chunks = cur_chunk->msg.packet_size / s->params->chunk_size;
+    if((cur_chunk->msg.packet_size % s->params->chunk_size) && (cur_chunk->msg.chunk_id == num_chunks - 1)) {
+        //bf->c11 = 1;  /KBedit From router_packet_send
+        msg_size = cur_chunk->msg.packet_size % s->params->chunk_size;
+    } 
+    s->voq_occupancy[output_port][output_chan] += msg_size;
+    //s->vc_occupancy[input_port][output_chan] += msg_size;  // KBEdit - INPUT PORT used here
+
+    // Trigger send event, if necessary
+    if(s->in_send_loop[output_port] == 0 && s->downstream_credit[output_port][downstream_chan] >= s->params->chunk_size) {
+        bf->c3 = 1;
+        terminal_dally_message *m;
+        ts = maxd(s->next_output_available_time[output_port], tw_now(lp)) - tw_now(lp);
+        tw_event *e = model_net_method_event_new(lp->gid, ts + gen_noise(lp, &msg->num_rngs), lp,
+                DRAGONFLY_DALLY_ROUTER, (void**)&m, NULL);
+        m->rail_id = msg->rail_id;
+        m->type = R_SEND;
+        m->magic = router_magic_num;
+        m->vc_index = output_port;
+        
+        tw_event_send(e);
+        s->in_send_loop[output_port] = 1;
+    }
+/* KBEdit: to be removed. No need to use queued msgs
     if(s->vc_occupancy[output_port][output_chan] + s->params->chunk_size  <= max_vc_size) {
         bf->c2 = 1;
         assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
@@ -6394,10 +6552,10 @@ static void router_packet_receive( router_state * s,
 
 
         //THIS WAS REMOVED WHEN QOS WAS INSTITUTED - READDED 5/20/19
-        /* a check for pending msgs is non-empty then we dont set anything. If
+        * a check for pending msgs is non-empty then we dont set anything. If
         * that is empty then we check if last_buf_full is set or not. If already
         * set then we don't overwrite it. If two packets arrive next to each other
-        * then the first person should be setting it. */
+        * then the first person should be setting it. **
         if(s->last_buf_full[output_port] == 0.0)
         {
             bf->c22 = 1;
@@ -6405,7 +6563,7 @@ static void router_packet_receive( router_state * s,
             s->last_buf_full[output_port] = tw_now(lp);
         }
     }
-
+*/
     if (g_congestion_control_enabled) {
             congestion_control_message *cc_msg_rc = cc_msg_rc_storage_create();
             cc_router_received_packet(s->local_congestion_controller, lp, s->params->chunk_size, output_port, output_chan, cur_chunk->msg.dfdally_src_terminal_id, cur_chunk->msg.app_id, cc_msg_rc);
@@ -6526,6 +6684,19 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     msg->saved_channel = output_chan;
     
     if(output_chan < 0) 
+    { // router_packet_send() is called only when a packet is waiting to be sent. If we're in this condition, it means there is no credit to send the waiting
+        bf->c1 = 1;
+        s->in_send_loop[output_port] = 0;
+        if(!s->last_buf_full[output_port])  //KBEdit: check that this works when there is no credit
+        {
+            bf->c2 = 1; 
+            msg->saved_busy_time = s->last_buf_full[output_port]; //KBEdit: this does not seem necessary based on the condition above
+            s->last_buf_full[output_port] = tw_now(lp);
+        }
+        return;
+    }
+    /* KBEdit - to be removed since queue count isn't necessary
+    if(output_chan < 0) 
     {
         bf->c1 = 1;
         s->in_send_loop[output_port] = 0;
@@ -6536,7 +6707,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
             s->last_buf_full[output_port] = tw_now(lp);
         }
         return;
-    }
+    }*/
 
     cur_entry = s->pending_msgs[output_port][output_chan];
     
@@ -6544,7 +6715,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
 
     assert(cur_entry != NULL);
 
-    if(s->last_buf_full[output_port]) //5-12-19, same here as above comment
+    if(s->last_buf_full[output_port]) //5-12-19, same here as above comment // KBEdit - to check in business
     {
         bf->c8 = 1;
         msg->saved_rcv_time = s->busy_time[output_port]; 
@@ -6589,20 +6760,24 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     tw_stime injection_ts, injection_delay;
     tw_stime propagation_ts, propagation_delay;
 
+    int transfer_size = s->params->chunk_size;
+    if(cur_entry->msg.packet_size == 0) {
+        transfer_size = s->params->credit_size;
+    } else if((cur_entry->msg.packet_size < s->params->chunk_size) && (cur_entry->msg.chunk_id == num_chunks - 1)) {
+        transfer_size = cur_entry->msg.packet_size % s->params->chunk_size;
+    }
+    
     propagation_delay = delay;
-    injection_delay = bytes_to_ns(s->params->chunk_size, bandwidth);
-
-    if(cur_entry->msg.packet_size == 0)
-        injection_delay = bytes_to_ns(s->params->credit_size, bandwidth);
-
-    if((cur_entry->msg.packet_size < s->params->chunk_size) && (cur_entry->msg.chunk_id == num_chunks - 1))
-        injection_delay = bytes_to_ns(cur_entry->msg.packet_size % s->params->chunk_size, bandwidth);
-
+    injection_delay = bytes_to_ns(transfer_size, bandwidth);
     injection_delay += s->params->router_delay;
 
     msg->saved_available_time = s->next_output_available_time[output_port];
     s->next_output_available_time[output_port] = 
         maxd(s->next_output_available_time[output_port], tw_now(lp));
+
+    // Send credit the moment that the packets leaves the input buffer and starts crossing the router.
+    tw_stime credit_ts = s->next_output_available_time[output_port] - tw_now(lp);
+    router_credit_send(s, &cur_entry->msg, lp, &(msg->num_rngs), credit_ts, transfer_size);
 
 #if PRINT_MSG_TIMES == 1
     // Record how long the packet was queued before it could progress
@@ -6682,6 +6857,15 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     }
     tw_event_send(e);
 
+    //s->vc_occupancy[input_port][output_chan] -= msg_size;  // KBEdit - INPUT PORT used here
+    s->voq_occupancy[output_port][output_chan] -= msg_size;
+    s->downstream_credit[output_port][cur_entry->msg.downstream_chan] -= s->params->chunk_size;
+    assert(//s->vc_occupancy[input_port][output_chan] >= 0 &&   // KBEdit - INPUT PORT used here
+            s->voq_occupancy[output_port][output_chan] >= 0 &&
+            s->downstream_credit[output_port][cur_entry->msg.downstream_chan] >= 0);
+    //KBEdit Fix credit senting
+    s->qos_data[output_port][vcg] += msg_size; 
+
     msg->saved_app_id = cur_entry->msg.app_id;
     if (g_congestion_control_enabled) {
         congestion_control_message *cc_msg_rc = cc_msg_rc_storage_create();
@@ -6693,7 +6877,6 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
         s->pending_msgs_tail[output_port], output_chan);
     rc_stack_push(lp, cur_entry, delete_terminal_dally_message_list, s->st);
 
-    s->qos_data[output_port][vcg] += msg_size; 
     s->next_output_available_time[output_port] -= s->params->router_delay;
     injection_ts -= s->params->router_delay;
 
@@ -6723,6 +6906,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     }
     if(next_output_chan < 0)
     {
+        // KBEdit: need to check if this is correct
         bf->c4 = 1;
         s->in_send_loop[output_port] = 0;
         return;
@@ -6738,6 +6922,32 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     m_new->magic = router_magic_num;
     m_new->vc_index = output_port;
     tw_event_send(e);
+
+    /*{
+        bf->c4 = 1;
+        s->stalled_chunks[output_port]++;
+        cur_chunk->msg.saved_vc = msg->vc_index;
+        cur_chunk->msg.saved_channel = msg->output_chan;
+        assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
+        append_to_terminal_dally_message_list( s->queued_msgs[output_port], 
+        s->queued_msgs_tail[output_port], output_chan, cur_chunk);
+        s->queued_count[output_port] += s->params->chunk_size;
+
+
+        //THIS WAS REMOVED WHEN QOS WAS INSTITUTED - READDED 5/20/19
+        * a check for pending msgs is non-empty then we dont set anything. If
+        * that is empty then we check if last_buf_full is set or not. If already
+        * set then we don't overwrite it. If two packets arrive next to each other
+        * then the first person should be setting it. **
+        if(s->last_buf_full[output_port] == 0.0)
+        {
+            bf->c22 = 1;
+            msg->saved_busy_time = s->last_buf_full[output_port];
+            s->last_buf_full[output_port] = tw_now(lp);
+        }
+    }
+*/
+
     return;
 }
 
@@ -6748,7 +6958,7 @@ static void router_buf_update_rc(router_state * s,
 {
     int indx = msg->vc_index;
     int output_chan = msg->output_chan;
-    s->vc_occupancy[indx][output_chan] += s->params->chunk_size;
+    //s->vc_occupancy[indx][output_chan] += s->params->chunk_size;    // KBEdit - INPUT PORT used here
 
     if(bf->c3)
     {
@@ -6763,8 +6973,8 @@ static void router_buf_update_rc(router_state * s,
             s->pending_msgs_tail[indx], output_chan);
         prepend_to_terminal_dally_message_list(s->queued_msgs[indx], 
             s->queued_msgs_tail[indx], output_chan, head);
-        s->vc_occupancy[indx][output_chan] -= s->params->chunk_size;
-        s->queued_count[indx] += s->params->chunk_size;
+        //s->vc_occupancy[indx][output_chan] -= s->params->chunk_size;    // KBEdit - INPUT PORT used here
+        //s->queued_count[indx] += s->params->chunk_size;
     }
     if(bf->c2) {
         s->in_send_loop[indx] = 0;
@@ -6776,7 +6986,11 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
 
     int indx = msg->vc_index;
     int output_chan = msg->output_chan;
-    s->vc_occupancy[indx][output_chan] -= s->params->chunk_size;
+    int downstream_chan = msg->downstream_chan;
+    //s->vc_occupancy[indx][output_chan] -= msg->packet_size;    // KBEdit - INPUT PORT used here
+    //s->voq_occupancy[indx][output_chan] -= msg->packet_size;
+    //assert(s->voq_occupancy[indx][output_chan] >= 0);
+    s->downstream_credit[indx][downstream_chan] += s->params->chunk_size;
 
     if(s->last_buf_full[indx] > 0.0)
     {
@@ -6792,38 +7006,51 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
         s->last_buf_full[indx] = 0.0;
     }
 
+    /* KBEdit - no longer needed
     if(s->queued_msgs[indx][output_chan] != NULL) {
         bf->c1 = 1;
         assert(indx < s->params->radix);
         assert(output_chan < s->params->num_vcs);
         terminal_dally_message_list *head = return_head(s->queued_msgs[indx],
             s->queued_msgs_tail[indx], output_chan);
-        /*if(strcmp(head->msg.category, "medium") == 0)
+        /if(strcmp(head->msg.category, "medium") == 0)
         {
         if(head->msg.saved_channel < 4 || head->msg.saved_channel >= 8)
         {
                 tw_error(TW_LOC, "\n invalid output chan %d last-hop %d", head->msg.saved_channel, head->msg.last_hop);
         }
-        }*/
+        }/
         router_credit_send(s, &head->msg, lp, 1, &(msg->num_rngs)); 
         append_to_terminal_dally_message_list(s->pending_msgs[indx], 
         s->pending_msgs_tail[indx], output_chan, head);
         s->vc_occupancy[indx][output_chan] += s->params->chunk_size;
         s->queued_count[indx] -= s->params->chunk_size; 
     }
-
-    if(s->in_send_loop[indx] == 0 && s->pending_msgs[indx][output_chan] != NULL) {
-        bf->c2 = 1;
-        terminal_dally_message *m;
-        tw_stime ts = maxd(s->next_output_available_time[indx], tw_now(lp)) - tw_now(lp);
-        tw_event *e = model_net_method_event_new(lp->gid, ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY_ROUTER,
-                (void**)&m, NULL);
-        m->type = R_SEND;
-        m->rail_id = msg->rail_id;
-        m->vc_index = indx;
-        m->magic = router_magic_num;
-        s->in_send_loop[indx] = 1;
-        tw_event_send(e);
+*/
+    if(s->in_send_loop[indx] == 0) {
+        int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
+        for(int i = 0; i < s->params->num_qos_levels; i++)
+        {
+            int base_limit = i * vcs_per_qos;
+            for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
+            {
+                if(s->pending_msgs[indx][k] != NULL)
+                {
+                    bf->c2 = 1;
+                    terminal_dally_message *m;
+                    tw_stime ts = maxd(s->next_output_available_time[indx], tw_now(lp)) - tw_now(lp);
+                    tw_event *e = model_net_method_event_new(lp->gid, ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY_ROUTER,
+                            (void**)&m, NULL);
+                    m->type = R_SEND;
+                    m->rail_id = msg->rail_id;
+                    m->vc_index = indx;
+                    m->magic = router_magic_num;
+                    s->in_send_loop[indx] = 1;
+                    tw_event_send(e);
+                    return;
+                }
+            }
+        }
     }
     return;
 }

@@ -130,6 +130,9 @@ struct terminal_dally_message
    short nm_igrp;
    short nm_dgrp;
    #endif
+   int prev_output_port;
+   int prev_output_chan;
+   int downstream_chan;
 };
 
 #ifdef __cplusplus
