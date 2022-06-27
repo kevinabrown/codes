@@ -53,7 +53,7 @@
 #define DEBUG_ROUTING_SCORE 0
 #define DEBUG_ROUTING_SCORE_ROUTER1 0
 #define DEBUG_ROUTING_SCORE_ROUTER2 599
-#define DEBUG_ROUTING_DECISION 0
+#define DEBUG_ROUTING_DECISION 1
 #define T_ID -1
 #define TRACK -1
 #define TRACK_PKT -1
@@ -1400,6 +1400,9 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
         vcg = get_vcg_from_category(msg);
     int base_vc = vcg * vcs_per_qos;
 
+    if(s->voq_occupancy[port][base_vc + 0] > s->params->adaptive_threshold_upper)
+        return true;
+    /*
     int vc_size = 0;
     int vc_score = 0;
     int peak_allocation = 0;
@@ -1412,7 +1415,7 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
     {
         vc_size = s->params->global_vc_size;
     }
-
+    */
     /*
     switch (scoring) {
         case ALPHA: //considers vc occupancy and queued count only
@@ -1456,13 +1459,13 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
 
     // Using only the occupancy of vc0 to determine if port is congested (since some other VCs are lightly used.
     //vc_score = s->vc_occupancy[port][base_vc + 0];  // KBEdit INPUT port would be used here
-    vc_score = s->voq_occupancy[port][base_vc + 0];
+/*    vc_score = s->voq_occupancy[port][base_vc + 0];
     peak_allocation = vc_size;
     float pct_occupied = ( (float)vc_score/(float)peak_allocation ) * 100;
     if (peak_allocation > 0 &&
             pct_occupied >= s->params->adaptive_threshold_upper)
         return true;
-
+*/
     return false;
 }
 static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, Connection conn, conn_minimality_t c_minimality)
@@ -3006,19 +3009,29 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
     //RC data storage end.
 
     #if DEBUG_QOS_T == 1 
+    int vcs_per_qos = s->params->num_vcs / num_qos_levels;
+    int base_limit = 0;
     // Print packet stats
+    // KBEdit TODO: add proper support for multiple rails
     if(dragonfly_term_pk_log != NULL)
     {
         for(int i = 0; i < num_qos_levels; i++)
         {
-            // time-stamp %d qos-level %lf avg-chunk-latency %lf max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks
-	        if(s->period_max_latency[i] > 0)
-                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf", tw_now(lp)/1000.0, s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i]);
+            double bw_consumed = get_term_bandwidth_consumption(s, 0, i);
+            base_limit = i * vcs_per_qos;
+
+            // time-stamp %d qos-level %lf avg-chunk-latency %lf max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks bw-consumed downstream-credits
+	        //if(s->period_max_latency[i] > 0)
+                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf %.0lf", tw_now(lp)/1000.0, s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i], bw_consumed);
 
             s->period_total_time[i] = 0;
             s->period_finished_chunks[i] = 0;
             s->period_min_latency[i] = INT_MAX;
             s->period_max_latency[i] = 0;
+
+            fprintf(dragonfly_term_pk_log, " %d", s->downstream_credit[0][base_limit]); // KBEdit TODO: add rail_id
+            for(int k = base_limit+1; k < base_limit + vcs_per_qos; k ++)
+                fprintf(dragonfly_term_pk_log, ":%d", s->downstream_credit[0][k]); // KBEdit TODO: add rail_id
         }
 
     }
@@ -3207,9 +3220,25 @@ void router_switch_min(router_state *s, tw_bf *bf, terminal_dally_message *msg, 
     routing = MINIMAL;
 }
 
+inline static bool terminal_downstream_credit_available(
+        terminal_state * s, 
+        int rail_id, 
+        int vcg,
+        int required_amount)
+{
+    terminal_dally_message_list *entry = NULL;
+    entry = s->terminal_msgs[rail_id][vcg];
+    
+    if(s->downstream_credit[rail_id][entry->msg.downstream_chan] >= required_amount)
+        return true;
+
+    return false;
+}
+
 static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
 {
     int num_qos_levels = s->params->num_qos_levels;
+    int vcs_per_qos = s->params->num_vcs / num_qos_levels;
     int rail_id = msg->rail_id;
 
     /* If there's a single class, return it's VC */
@@ -3241,33 +3270,36 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
             update_accumulated_tokens(tw_now(lp), s, rail_id, k);
 
             //if(s->terminal_msgs[rail_id][k] != NULL && s->vc_occupancy[rail_id][k] + s->params->chunk_size <= s->params->cn_vc_size)
-            if(s->terminal_msgs[rail_id][k] != NULL && s->downstream_credit[rail_id][k] >= s->params->chunk_size)
+            if(s->terminal_msgs[rail_id][k] != NULL)
             {
-                // The class is red if there are no token in the max (peak) rate bucket /
-                if(s->qos_max_token_count[rail_id][k] < 1.0f)
+                if(terminal_downstream_credit_available(s, rail_id, k, s->params->chunk_size))
                 {
-                    red = true;
-                    break;
-                }
-                // The class is yellow if there are no token in the min (assured) rate bucket /
-                else if(s->qos_min_token_count[rail_id][k] < 1.0f)
-                {
-                    yellow = true;
-                    if(first_yellow < 0)
+                    // The class is red if there are no token in the max (peak) rate bucket /
+                    if(s->qos_max_token_count[rail_id][k] < 1.0f)
                     {
-                        first_yellow = k;
+                        red = true;
+                        break;
                     }
-                    break;
-                }
-                // The class is green because we have tokens in the  min (assured) rate bucket /
-                else
-                {
-                    green = true;
-                    if(first_green < 0 )
+                    // The class is yellow if there are no token in the min (assured) rate bucket /
+                    else if(s->qos_min_token_count[rail_id][k] < 1.0f)
                     {
-                        first_green = k;
+                        yellow = true;
+                        if(first_yellow < 0)
+                        {
+                            first_yellow = k;
+                        }
+                        break;
                     }
-                    break;
+                    // The class is green because we have tokens in the  min (assured) rate bucket /
+                    else
+                    {
+                        green = true;
+                        if(first_green < 0 )
+                        {
+                            first_green = k;
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -3298,15 +3330,18 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
     for(int i = 0; i < num_qos_levels; i++)
     {
         //if(s->terminal_msgs[rail_id][i] != NULL && s->vc_occupancy[rail_id][i] + s->params->chunk_size <= s->params->cn_vc_size)
-        if(s->terminal_msgs[rail_id][i] != NULL && s->downstream_credit[rail_id][i] >= s->params->chunk_size)
+        if(s->terminal_msgs[rail_id][next_rr_vcg] != NULL)
         {
-            bf->c2 = 1;
-            
-            if(msg->last_saved_qos < 0)
-                msg->last_saved_qos = s->last_qos_lvl[rail_id];
-            
-            s->last_qos_lvl[rail_id] = next_rr_vcg;
-            return i;
+            if(terminal_downstream_credit_available(s, rail_id, next_rr_vcg, s->params->chunk_size))
+            {
+                bf->c2 = 1;
+                
+                if(msg->last_saved_qos < 0)
+                    msg->last_saved_qos = s->last_qos_lvl[rail_id];
+                
+                s->last_qos_lvl[rail_id] = next_rr_vcg;
+                return next_rr_vcg;
+            }
         }
         next_rr_vcg = (next_rr_vcg + 1) % num_qos_levels;
     }
@@ -3398,7 +3433,7 @@ static int get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_message *
     return -1;
 }
 
-inline static bool is_downsteam_credit_available(
+inline static bool router_downstream_credit_available(
         router_state * s, 
         int output_port, 
         int output_chan,
@@ -3407,6 +3442,7 @@ inline static bool is_downsteam_credit_available(
     terminal_dally_message_list *entry = NULL;
     entry = s->pending_msgs[output_port][output_chan];
     
+    assert(output_chan == entry->msg.downstream_chan);
     if(s->downstream_credit[output_port][entry->msg.downstream_chan] >= required_amount)
         return true;
 
@@ -3449,33 +3485,38 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
             base_limit = i * vcs_per_qos;
             for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
             {
+                // Check if there is a chunck waiting in this VC
                 if(s->pending_msgs[output_port][k] != NULL)
                 {
-                    /* Check if this is a yellow class: it is not green and within its peak rate. */
-                    if(s->qos_max_token_count[output_port][i] < 1.0f)
+                    // Check if we have enough downstream credit for this chunck
+                    if(router_downstream_credit_available(s, output_port, k, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
                     {
-                        red = true;
-                        break;
-                    }
-                    /* Check if this is a green class: it is within its assured rate */
-                    if(s->qos_min_token_count[output_port][i] < 1.0f)
-                    {
-                        yellow = true;
-                        if(first_yellow < 0)
+                        /* Check if this is a yellow class: it is not green and within its peak rate. */
+                        if(s->qos_max_token_count[output_port][i] < 1.0f)
                         {
-                            first_yellow = k;
+                            red = true;
+                            break;
                         }
-                        break;
-                    }
-                    /* If the class is neithe green nor yellow, it is red */
-                    else
-                    {
-                        green = true;
-                        if(first_green < 0 )
+                        /* Check if this is a green class: it is within its assured rate */
+                        if(s->qos_min_token_count[output_port][i] < 1.0f)
                         {
-                            first_green = k;
+                            yellow = true;
+                            if(first_yellow < 0)
+                            {
+                                first_yellow = k;
+                            }
+                            break;
                         }
-                        break;
+                        /* If the class is neithe green nor yellow, it is red */
+                        else
+                        {
+                            green = true;
+                            if(first_green < 0 )
+                            {
+                                first_green = k;
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -3551,47 +3592,41 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
         // Return the first VC with traffic from the green class
         if(first_green >= 0)
         {
-            if(is_downsteam_credit_available(s, output_port, first_green, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
-            {
-                int i = first_green / vcs_per_qos;
-                s->qos_min_token_count[output_port][i] -= 1.0f;
-                if(s->qos_max_token_count[output_port][i] >= 1.0f)
-                    s->qos_max_token_count[output_port][i] -= 1.0f;
+            int i = first_green / vcs_per_qos;
+            s->qos_min_token_count[output_port][i] -= 1.0f;
+            if(s->qos_max_token_count[output_port][i] >= 1.0f)
+                s->qos_max_token_count[output_port][i] -= 1.0f;
 
-                #if DEBUG_QOS == 1
-                s->qos_green_sent[output_port][i]++;
-                #endif
-                #if DEBUG_QOS_X == 1
-                printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_GREEN)\n", tw_now(lp),
-                        s->router_id, output_port, i, first_green);
+            #if DEBUG_QOS == 1
+            s->qos_green_sent[output_port][i]++;
+            #endif
+            #if DEBUG_QOS_X == 1
+            printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_GREEN)\n", tw_now(lp),
+                    s->router_id, output_port, i, first_green);
 
-                #endif
+            #endif
 
-                assert(s->qos_min_token_count[output_port][i] >= 0.0);
-                assert(s->qos_max_token_count[output_port][i] >= 0.0);
+            assert(s->qos_min_token_count[output_port][i] >= 0.0);
+            assert(s->qos_max_token_count[output_port][i] >= 0.0);
 
-                return first_green;
-            }
+            return first_green;
         }
         else if(first_yellow >= 0)
         {
-            if(is_downsteam_credit_available(s, output_port, first_yellow, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
-            {
-                int i = first_yellow / vcs_per_qos;
-                s->qos_max_token_count[output_port][i] -= 1.0f;
+            int i = first_yellow / vcs_per_qos;
+            s->qos_max_token_count[output_port][i] -= 1.0f;
 
-                #if DEBUG_QOS == 1
-                s->qos_yellow_sent[output_port][i]++;
-                #endif
-                #if DEBUG_QOS_X == 1
-                printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_YELLOW)\n", tw_now(lp),
-                        s->router_id, output_port, i, first_yellow);
-                #endif
+            #if DEBUG_QOS == 1
+            s->qos_yellow_sent[output_port][i]++;
+            #endif
+            #if DEBUG_QOS_X == 1
+            printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent_YELLOW)\n", tw_now(lp),
+                    s->router_id, output_port, i, first_yellow);
+            #endif
 
-                assert(s->qos_max_token_count[output_port][i] >= 0.0);
+            assert(s->qos_max_token_count[output_port][i] >= 0.0);
 
-                return first_yellow;
-            }
+            return first_yellow;
         }
         /*
         for(int i = 0; i < num_qos_levels; i++)
@@ -3641,7 +3676,7 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
             #endif
             if(s->pending_msgs[output_port][k] != NULL)
             {
-                if(is_downsteam_credit_available(s, output_port, k, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
+                if(router_downstream_credit_available(s, output_port, k, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
                 {
                     #if DEBUG_QOS_X == 1
                     printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (sent-RED)\n", tw_now(lp), 
@@ -4024,7 +4059,7 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
     if(dragonfly_term_pk_log == NULL)
     {
         dragonfly_term_pk_log = fopen(term_pk_log, "w+");
-        fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max");
+        fprintf(dragonfly_term_pk_log, "\n time-stamp term-id qos-level pk-avg pk-min pk-max bw-consumed downstream-credits");
     }
     #endif
  
@@ -4102,6 +4137,7 @@ void terminal_dally_init( terminal_state * s, tw_lp * lp )
             s->terminal_msgs[i][j] = NULL;
             s->terminal_msgs_tail[i][j] = NULL;
         }
+        // All vcs are initialized with credit, but only vc0 of each class with be used
         for(int j = 0; j < p->num_vcs; j++) 
             s->downstream_credit[i][j] = p->cn_vc_size;
 
@@ -4214,7 +4250,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     {
         dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
 
-        fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent vc-occupancy queued-count_per-port"); // Kevin Bronw: Added VC occupancy during routing+qos study 2021/05/31
+        fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time qos-green-total qos-green-sent qos-yellow-total qos-yellow-sent qos-red-total qos-red-sent vc-occupancy downstream-credits"); // Kevin Bronw: Added VC occupancy during routing+qos study 2021/05/31
     }
     #if DEBUG_QOS_R == 1
     if (r->router_id == 0)
@@ -5086,6 +5122,7 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
         vcg = token_get_next_vcg(s, bf, msg, lp);
     else
         vcg = get_next_vcg(s, bf, msg, lp);
+    //int downstream_chan = vcg * (s->params->num_vcs/num_qos_levels);  // KBEdit - unneeded. to delete
     
     /* For a terminal to router connection, there would be as many VCGs as number
     * of VCs*/
@@ -5194,8 +5231,8 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
     }
     
     s->vc_occupancy[msg->rail_id][vcg] += data_size;
-    s->downstream_credit[msg->rail_id][vcg] -= s->params->chunk_size;
-    assert(s->downstream_credit[msg->rail_id][vcg] >= 0);
+    s->downstream_credit[msg->rail_id][cur_entry->msg.downstream_chan] -= s->params->chunk_size;
+    assert(s->downstream_credit[msg->rail_id][cur_entry->msg.downstream_chan] >= 0);
     cur_entry = return_head(s->terminal_msgs[msg->rail_id], s->terminal_msgs_tail[msg->rail_id], vcg); 
     rc_stack_push(lp, cur_entry, delete_terminal_dally_message_list, s->st);
     s->terminal_length[msg->rail_id][vcg] -= data_size;
@@ -5215,6 +5252,7 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
             next_vcg = get_next_vcg(s, bf, msg, lp);
         }
     }
+    //downstream_chan = next_vcg * (s->params->num_vcs/s->params->num_qos_levels); KBEdit unneeded
 
     cur_entry = NULL;
     if(next_vcg >= 0)
@@ -5222,7 +5260,8 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
 
     /* if there is another packet inline then schedule another send event */
     //if(cur_entry != NULL && s->vc_occupancy[msg->rail_id][next_vcg] + s->params->chunk_size <= s->params->cn_vc_size) {
-    if(cur_entry != NULL && s->downstream_credit[msg->rail_id][next_vcg] >= s->params->chunk_size) {
+    //if(cur_entry != NULL && s->downstream_credit[msg->rail_id][cur_chunk->msg.downstream_chan] >= s->params->chunk_size) {
+    if(cur_entry != NULL) {
         terminal_dally_message *m_new;
         e = model_net_method_event_new(lp->gid, injection_ts + gen_noise(lp, &msg->num_rngs), lp, DRAGONFLY_DALLY, (void**)&m_new, NULL);
         m_new->type = T_SEND;
@@ -6489,7 +6528,7 @@ static void router_packet_receive( router_state * s,
 
     assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
     append_to_terminal_dally_message_list(s->pending_msgs[output_port], s->pending_msgs_tail[output_port],
-                                            output_chan, cur_chunk);
+                                            downstream_chan, cur_chunk); // KBEdit - downstream_chan added here
 
     int msg_size = s->params->chunk_size;
     uint64_t num_chunks = cur_chunk->msg.packet_size / s->params->chunk_size;
@@ -6497,7 +6536,7 @@ static void router_packet_receive( router_state * s,
         //bf->c11 = 1;  /KBedit From router_packet_send
         msg_size = cur_chunk->msg.packet_size % s->params->chunk_size;
     } 
-    s->voq_occupancy[output_port][output_chan] += msg_size;
+    s->voq_occupancy[output_port][downstream_chan] += msg_size; // KBEdit - downstream_chan added here
     //s->vc_occupancy[input_port][output_chan] += msg_size;  // KBEdit - INPUT PORT used here
 
     // Trigger send event, if necessary
@@ -6857,6 +6896,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     }
     tw_event_send(e);
 
+    assert(output_chan == cur_entry->msg.downstream_chan);
     //s->vc_occupancy[input_port][output_chan] -= msg_size;  // KBEdit - INPUT PORT used here
     s->voq_occupancy[output_port][output_chan] -= msg_size;
     s->downstream_credit[output_port][cur_entry->msg.downstream_chan] -= s->params->chunk_size;
@@ -6903,6 +6943,8 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
                 break; 
             }
         }
+        if(next_output_chan >= 0)
+            break;
     }
     if(next_output_chan < 0)
     {
