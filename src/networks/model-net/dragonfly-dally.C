@@ -3549,45 +3549,6 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
          * Combining the loops would give slightly better performance since
          * tokens for lower priority classs don't have to be updated if a
          * higher priorty class is sending. */
-        /*
-        #if DEBUG_QOS == 1 
-        for(int i = 0; i < num_qos_levels; i++)
-        {
-            if(s->qos_max_token_count[output_port][i] < 1.0f)
-            {
-                base_limit = i * vcs_per_qos;
-                for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
-                {
-                    if(s->pending_msgs[output_port][k] != NULL)
-                    {
-                        #if DEBUG_QOS_X == 1
-                        printf("[%.0lf] qos_blocked router:%d port:%d class:%d vc:%d ==\n", tw_now(lp), 
-                                s->router_id, output_port, i, k);
-                        #endif
-                        s->qos_blocked[output_port][i]++;
-                        break; 
-                    }
-                }
-            }
-            else
-            {
-                base_limit = i * vcs_per_qos;
-                for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
-                {
-                    if(s->pending_msgs[output_port][k] != NULL)
-                    {
-                        #if DEBUG_QOS_X == 1
-                        printf("[%.0lf] qos_unblocked router:%d port:%d class:%d vc:%d ==\n", tw_now(lp), 
-                                s->router_id, output_port, i, k);
-                        #endif
-                        s->qos_unblocked[output_port][i]++;
-                        break; 
-                    }
-                }
-            }
-        }
-        #endif
-        */
 
         // Return the first VC with traffic from the green class
         if(first_green >= 0)
@@ -3628,37 +3589,6 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
 
             return first_yellow;
         }
-        /*
-        for(int i = 0; i < num_qos_levels; i++)
-        {
-            if(s->qos_max_token_count[output_port][i] >= 1.0f)
-            {
-                base_limit = i * vcs_per_qos;
-                for(int k = base_limit; k < base_limit + vcs_per_qos; k ++)
-                {
-                    if(s->pending_msgs[output_port][k] != NULL)
-                    {
-                        #if DEBUG_QOS_X == 1
-                        printf("[%.0lf] qos_send router:%d port:%d class:%d vc:%d (sent)\n", tw_now(lp), 
-                                s->router_id, output_port, i, k);
-                        #endif
-
-                        s->qos_max_token_count[output_port][i] -= 1.0f;
-                        
-                        #if DEBUG_QOS == 1
-                        s->qos_compliant[output_port][i]++;
-                        #endif
-                        
-                        return k;
-                    }
-                }
-
-            }
-           
-        }
-        */
-
-
     }
         
     /* All vcgs are exceeding their bandwidth limits*/
