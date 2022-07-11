@@ -3244,7 +3244,6 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
     /* If there's a single class, return it's VC */
     if(num_qos_levels == 1)
     {
-        //if(s->terminal_msgs[rail_id][0] == NULL || s->vc_occupancy[rail_id][0] + s->params->chunk_size > s->params->cn_vc_size)
         if(s->terminal_msgs[rail_id][0] == NULL || s->downstream_credit[rail_id][0] < s->params->chunk_size)
             return -1;
         else
@@ -3269,7 +3268,6 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
             // Update token buckets with newly accumulated tokens /
             update_accumulated_tokens(tw_now(lp), s, rail_id, k);
 
-            //if(s->terminal_msgs[rail_id][k] != NULL && s->vc_occupancy[rail_id][k] + s->params->chunk_size <= s->params->cn_vc_size)
             if(s->terminal_msgs[rail_id][k] != NULL)
             {
                 if(terminal_downstream_credit_available(s, rail_id, k, s->params->chunk_size))
@@ -3329,7 +3327,6 @@ static int token_get_next_vcg(terminal_state * s, tw_bf * bf, terminal_dally_mes
     /* All vcgs are exceeding their bandwidth limits*/
     for(int i = 0; i < num_qos_levels; i++)
     {
-        //if(s->terminal_msgs[rail_id][i] != NULL && s->vc_occupancy[rail_id][i] + s->params->chunk_size <= s->params->cn_vc_size)
         if(s->terminal_msgs[rail_id][next_rr_vcg] != NULL)
         {
             if(terminal_downstream_credit_available(s, rail_id, next_rr_vcg, s->params->chunk_size))
@@ -3465,11 +3462,6 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
     /* First make sure the bandwidth consumptions are up to date. */
     if(BW_MONITOR == 1 && num_qos_levels > 1)
     {
-        // The following seem unused.
-        int vc_size = s->params->global_vc_size;
-        if(output_port < s->params->intra_grp_radix)
-            vc_size = s->params->local_vc_size;
-
         int first_green = -1;       // Marks the class that can send next
         int first_yellow = -1;      // If no classes are marked green, this class will send next
 
@@ -3672,11 +3664,6 @@ static int get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dally_mess
                 }
             }
         }
-
-        // The following seem unused.
-        int vc_size = s->params->global_vc_size;
-        if(output_port < s->params->intra_grp_radix)
-            vc_size = s->params->local_vc_size;
 
         /*
         #if DEBUG_QOS == 1 
