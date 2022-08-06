@@ -6555,6 +6555,17 @@ static void router_packet_receive( router_state * s,
         tw_event_send(e);
         s->in_send_loop[output_port] = 1;
     }
+    else if(s->in_send_loop[output_port] == 0 && s->downstream_credit[output_port][downstream_chan] < s->params->chunk_size) {
+        /* Entering here means the port is not sending and there's no credit. 
+        * Next we check if last_buf_full was set. If not, then we set it to denote that 
+        * the port is busy. (We should change name from 'last_buf_full'. */
+        if(s->last_buf_full[output_port] == 0.0)
+        {
+            bf->c22 = 1;
+            msg->saved_busy_time = s->last_buf_full[output_port];
+            s->last_buf_full[output_port] = tw_now(lp);
+        }
+    }
 /* KBEdit: to be removed. No need to use queued msgs
     if(s->vc_occupancy[output_port][output_chan] + s->params->chunk_size  <= max_vc_size) {
         bf->c2 = 1;
@@ -6727,7 +6738,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     { // router_packet_send() is called only when a packet is waiting to be sent. If we're in this condition, it means there is no credit to send the waiting
         bf->c1 = 1;
         s->in_send_loop[output_port] = 0;
-        if(!s->last_buf_full[output_port])  //KBEdit: check that this works when there is no credit
+        if(!s->last_buf_full[output_port])
         {
             bf->c2 = 1; 
             msg->saved_busy_time = s->last_buf_full[output_port]; //KBEdit: this does not seem necessary based on the condition above
@@ -6754,18 +6765,6 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     msg->dfdally_src_terminal_id = cur_entry->msg.dfdally_src_terminal_id;
 
     assert(cur_entry != NULL);
-
-    if(s->last_buf_full[output_port]) //5-12-19, same here as above comment // KBEdit - to check in business
-    {
-        bf->c8 = 1;
-        msg->saved_rcv_time = s->busy_time[output_port]; 
-        msg->saved_busy_time = s->last_buf_full[output_port]; 
-        msg->saved_sample_time = s->busy_time_sample[output_port];  
-        s->busy_time[output_port] += (tw_now(lp) - s->last_buf_full[output_port]); 
-        s->busy_time_sample[output_port] += (tw_now(lp) - s->last_buf_full[output_port]);
-        s->ross_rsample.busy_time[output_port] += (tw_now(lp) - s->last_buf_full[output_port]);
-        s->last_buf_full[output_port] = 0.0;
-    }
 
     int vcg = 0;
     if(num_qos_levels > 1)
@@ -6814,6 +6813,19 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     msg->saved_available_time = s->next_output_available_time[output_port];
     s->next_output_available_time[output_port] = 
         maxd(s->next_output_available_time[output_port], tw_now(lp));
+
+    // If the port was busy, it stops being busy when it starts sending at next_output_available_time[]
+    if(s->last_buf_full[output_port])
+    {
+        bf->c8 = 1;
+        msg->saved_rcv_time = s->busy_time[output_port]; 
+        msg->saved_busy_time = s->last_buf_full[output_port]; 
+        msg->saved_sample_time = s->busy_time_sample[output_port];  
+        s->busy_time[output_port] += (s->next_output_available_time[output_port] - s->last_buf_full[output_port]); 
+        s->busy_time_sample[output_port] += (s->next_output_available_time[output_port] - s->last_buf_full[output_port]);
+        s->ross_rsample.busy_time[output_port] += (s->next_output_available_time[output_port] - s->last_buf_full[output_port]);
+        s->last_buf_full[output_port] = 0.0;
+    }
 
     // Send credit the moment that the packets leaves the input buffer and starts crossing the router.
     tw_stime credit_ts = s->next_output_available_time[output_port] - tw_now(lp);
@@ -7035,6 +7047,10 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
     //assert(s->voq_occupancy[indx][output_chan] >= 0);
     s->downstream_credit[indx][downstream_chan] += s->params->chunk_size;
 
+    /* KBEdit - this shouldn't be needed any longer.
+     * After being busy (i.e. last_buf_full > 0, the port stops being busy 
+     * when the router_packet_send() runs. So these busy_time calculation should
+     * happen only in the router_packet_send() function.
     if(s->last_buf_full[indx] > 0.0)
     {
         bf->c3 = 1;
@@ -7048,6 +7064,7 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
         s->busy_time_ross_sample[indx] += (tw_now(lp) - s->last_buf_full[indx]);
         s->last_buf_full[indx] = 0.0;
     }
+    */
 
     /* KBEdit - no longer needed
     if(s->queued_msgs[indx][output_chan] != NULL) {
@@ -7079,6 +7096,9 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
             {
                 if(s->pending_msgs[indx][k] != NULL)
                 {
+                    // TODO - if we allow returning credits smaller than the largest packet, 
+                    // we may need to check here if we have sufficient credits to 
+                    // send the next packet. - KB Aug.2022
                     bf->c2 = 1;
                     terminal_dally_message *m;
                     tw_stime ts = maxd(s->next_output_available_time[indx], tw_now(lp)) - tw_now(lp);
