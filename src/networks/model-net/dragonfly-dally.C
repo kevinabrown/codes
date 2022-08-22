@@ -6371,7 +6371,7 @@ static void router_packet_receive( router_state * s,
             downstream_chan++;
             assert(downstream_chan < vcs_per_qos);
         }
-        else if (cur_chunk->msg.my_hops_cur_group > 1)
+        else if (cur_chunk->msg.my_hops_cur_group >= 1)
         { // Otherwise, we are taking a local hop and it isn't our first in this group.
             downstream_chan++;
             assert(downstream_chan < vcs_per_qos);
