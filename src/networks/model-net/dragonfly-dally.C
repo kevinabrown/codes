@@ -1397,6 +1397,18 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
         return false;
     }
 
+    int vc_score = 0;
+    for(int k=0; k < s->params->num_vcs; k++)
+    {
+        vc_score += s->voq_occupancy[port][k];
+    }
+    if (c_minimality != C_MIN)
+        vc_score = vc_score *2;
+
+    if(vc_score > s->params->adaptive_threshold_upper)
+        return true;
+
+    /*
     int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
     int vcg = 0;
     if (s->params->num_qos_levels > 1)
@@ -1405,6 +1417,7 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
 
     if(s->voq_occupancy[port][base_vc + 0] > s->params->adaptive_threshold_upper)
         return true;
+    */
     /*
     int vc_size = 0;
     int vc_score = 0;
