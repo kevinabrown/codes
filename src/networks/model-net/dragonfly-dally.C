@@ -1402,8 +1402,8 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
     {
         vc_score += s->voq_occupancy[port][k];
     }
-    if (c_minimality != C_MIN)
-        vc_score = vc_score *2;
+    //if (c_minimality != C_MIN)
+    //    vc_score = vc_score *2;
 
     if(vc_score > s->params->adaptive_threshold_upper)
         return true;
