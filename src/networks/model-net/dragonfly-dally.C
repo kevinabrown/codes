@@ -1378,6 +1378,10 @@ static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, ter
                 new_score = score * scoring_factors_local_dest[vcg] * -1;
             }
         }
+        else {
+            // We should not be trying apply advanced scoring if we're not in an intermediate or if the src group != dest group.
+            assert(0);
+        }
     }
 
     return new_score;
@@ -7457,7 +7461,7 @@ static vector< Connection > get_legal_minimal_stops(router_state *s, tw_bf *bf, 
 //Note that this is different than Dragonfly Plus's implementation, this isn't the converse of minimal, these are any
 //connections that could lead to the intermediate group or a new one if necessary
 // - This has been extended to support local (intra-group) nonmin hop within the intermediate group.
-//   Local nonmin hop within the destination group is handled elsewhere and not allowed when src group == dst group.
+//   Local nonmin hop within the destination group is handled elsewhere and not allowed when src group != dst group.
 static vector< Connection > get_legal_nonminimal_stops(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
 {
     int my_router_id = s->router_id;
