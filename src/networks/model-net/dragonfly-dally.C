@@ -1409,8 +1409,13 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
     //if (c_minimality != C_MIN)
     //    vc_score = vc_score *2;
 
-    if(vc_score > s->params->adaptive_threshold_upper)
-        return true;
+    if(conn.conn_type == CONN_LOCAL){
+        if(vc_score > s->params->adaptive_threshold_upper)
+            return true;
+    }else if(conn.conn_type == CONN_GLOBAL){
+        if(vc_score > s->params->adaptive_threshold_upper * 4)
+            return true;
+    }
 
     /*
     int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
