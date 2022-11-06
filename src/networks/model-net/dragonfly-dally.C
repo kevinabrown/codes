@@ -110,6 +110,8 @@ char snapshot_filename[128];
 /* time in nanosecs */
 //static int bw_reset_window = 50000000;
 static int bw_reset_window = 5000000;
+static int ut_broadcast_window = 5000000;
+static char ut_policy[MAX_NAME_LENGTH];
 
 #define indexer3d(_ptr, _x, _y, _z, _maxx, _maxy, _maxz) \
         ((_ptr) + _z * (_maxx * _maxy) + _y * (_maxx) + _x)
@@ -354,6 +356,8 @@ typedef enum event_t
     R_SEND,
     R_ARRIVE,
     R_BUFFER,
+    R_GROUP_BUFFER,
+    R_GROUP_BROADCAST,
     R_MIN_SWITCH,
     R_BANDWIDTH,
     R_BW_HALT,
@@ -612,6 +616,12 @@ struct router_state
     int** vc_occupancy;
     int** downstream_credit; // downstream_credit [rail_id][qos_level]
     int** voq_occupancy;
+    int* voq_occupancy_total;
+    int* group_link_my_ids;
+    int* group_link_status;
+    //int* group_link_status_agg;
+    int group_link_update_count;
+    tw_stime* group_link_status_time;
     int64_t* link_traffic;
     int64_t * link_traffic_sample;
 
@@ -1386,6 +1396,22 @@ static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, ter
 
     return new_score;
 }
+/* Checks in non-source group*/
+static inline bool exceed_adaptive_upper_threshold_general(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, conn_minimality_t c_minimality)
+{ // TODO add validation checks
+
+    // Does not need to recieve the dest_group as a param since we should only call this function in the intm_group or dest_group.
+
+    int port = conn.port;
+    if (port == -1 || s->params->adaptive_threshold_upper == -1) {
+        return false;
+    }
+
+    if(s->voq_occupancy_total[port] > s->params->adaptive_threshold_upper)
+        return true;
+
+    return false;
+}
 
 /* Checks if port occupancy exceeds the adaptive routing upper threshold. Uses
  * the port score as a proxy for the occupancy measurement.
@@ -1394,28 +1420,49 @@ static inline int dfdally_apply_advanced_scoring(router_state *s, tw_bf *bf, ter
  *     If the best conns exceed the threshold, then all conns will exceed the
  *     threshold as well.
  *     */
-static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, conn_minimality_t c_minimality)
+static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, terminal_dally_message *msg, Connection conn, conn_minimality_t c_minimality, int fdest_group_id)
 {
     int port = conn.port;
     if (port == -1 || s->params->adaptive_threshold_upper == -1) {
         return false;
     }
 
-    int vc_score = 0;
-    for(int k=0; k < s->params->num_vcs; k++)
-    {
-        vc_score += s->voq_occupancy[port][k];
+    int my_group_id = s->group_id;
+    int src_group_id = msg->origin_router_id / s->params->num_routers;
+    
+    // This function should only be called in the source group
+    assert(my_group_id == src_group_id);
+
+    //int vc_score = 0;
+    //for(int k=0; k < s->params->num_vcs; k++)
+    //{
+    //    vc_score += s->voq_occupancy[port][k];
+    //}
+    
+    if(conn.conn_type == CONN_GLOBAL){
+        if(s->voq_occupancy_total[port] > s->params->adaptive_threshold_upper)
+            return true;
+    }else if(conn.conn_type == CONN_LOCAL && c_minimality == C_MIN){
+        // Check if the downstream router is congested
+        if(s->group_link_status[fdest_group_id] == 1)
+            return true;
+    }else if(conn.conn_type == CONN_LOCAL && c_minimality != C_MIN){
+        //if(s->group_link_status_agg[conn.dest_gid / s->params->num_routers] == 1) // Bug: this was getting local group instead of caculation
+        //if(s->group_link_status_agg[conn.dest_gid % s->params->num_routers] == 1) // depecated? This was checking the load on all ports - not necesary
+        assert(msg->intm_grp_id >= 0 && msg->intm_grp_id < s->params->num_groups);
+        if(s->group_link_status[msg->intm_grp_id] == 1)
+            return true;
     }
     //if (c_minimality != C_MIN)
     //    vc_score = vc_score *2;
 
-    if(conn.conn_type == CONN_LOCAL){
-        if(vc_score > s->params->adaptive_threshold_upper)
-            return true;
-    }else if(conn.conn_type == CONN_GLOBAL){
-        if(vc_score > s->params->adaptive_threshold_upper * 4)
-            return true;
-    }
+//    if(conn.conn_type == CONN_LOCAL){
+//        if(vc_score > s->params->adaptive_threshold_upper)
+//            return true;
+//    }else if(conn.conn_type == CONN_GLOBAL){
+//        if(vc_score > s->params->adaptive_threshold_upper * 4)
+//            return true;
+//    }
 
     /*
     int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
@@ -1439,46 +1486,6 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
         s->params->num_global_channels))
     {
         vc_size = s->params->global_vc_size;
-    }
-    */
-    /*
-    switch (scoring) {
-        case ALPHA: //considers vc occupancy and queued count only
-            for(int k=0; k < s->params->num_vcs; k++)
-            {
-                vc_score += s->vc_occupancy[port][k];
-                peak_allocation += vc_size;
-            }
-            break;
-        case BETA: //considers vc occupancy and queued count multiplied by the number of minimal hops to destination from the potential next stop
-            tw_error(TW_LOC, "Beta scoring not implemented");
-            break;
-        case GAMMA: //delta scoring but higher is better
-            tw_error(TW_LOC, "Gamma scoring not implemented");
-            break;
-        case DELTA: //alpha but biased 2:1 toward minimal
-            for(int k=0; k < s->params->num_vcs; k++)
-            {
-                vc_score += s->vc_occupancy[port][k];
-                peak_allocation += vc_size;
-            }
-            break;
-        case EPSILON: // consider queue count and the occupancy of my vc and higher priority vcs only
-            for(int k = 0; k < base_vc + vcs_per_qos; k++)
-            {
-                vc_score += s->vc_occupancy[port][k];
-                peak_allocation += vc_size;
-            }
-            break;
-        case ZETA: // consider queue count and the occupancy of my vc only
-            for(int k = base_vc; k < base_vc + vcs_per_qos; k++)
-            {
-                vc_score += s->vc_occupancy[port][k];
-                peak_allocation += vc_size;
-            }
-            break;
-        default:
-            tw_error(TW_LOC, "Unsupported Scoring Protocol Error\n");
     }
     */
 
@@ -2121,6 +2128,13 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
             fprintf(stderr, "Adaptive Minimal Routing UPPER Threshold not specified: setting to default = -1 and disregaring. (Will consider congested minimal and nonminimal routes based on scoring metric alone)\n");
         p->adaptive_threshold_upper = -1;
     }
+    rc = configuration_get_value_int(&config, "PARAMS", "ut_broadcast_window", anno, &ut_broadcast_window); // KBEDIT
+    if(rc) {
+        if(!myRank)
+            fprintf(stderr, "Setting ut_broadcast_window to %d\n", ut_broadcast_window);
+	}
+    configuration_get_value(&config, "PARAMS", "ut_policy", anno, ut_policy,
+            MAX_NAME_LENGTH);
 
     configuration_get_value(&config, "PARAMS", "cn_sample_file", anno, cn_sample_file,
             MAX_NAME_LENGTH);
@@ -3218,7 +3232,11 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
         for(int j = 0; j < num_qos_levels; j++){
             if(s->route_min_score[j] > 0 || s->route_lower_threshold[j] > 0 || s->route_upper_threshold_for_min_score[j] > 0 || s->route_upper_threshold_for_nonmin_score[j] > 0 || s->route_nonmin_score[j] > 0){
                 fprintf(dragonfly_rtr_rtg_log, "\n %.0f %d %d %d %d %d %d %d %d", tw_now(lp), s->router_id, j, s->route_min_score[j], s->route_min_score_only[j], s->route_lower_threshold[j], s->route_upper_threshold_for_min_score[j], s->route_upper_threshold_for_nonmin_score[j], s->route_nonmin_score[j]);
-            
+
+                // This is repeated for each qos level for a given switch. It should be elsewhere
+                fprintf(dragonfly_rtr_rtg_log, " %d", s->group_link_update_count);
+                s->group_link_update_count = 0;
+
                 s->route_min_score[j] = 0;
                 s->route_min_score_only[j] = 0;
                 s->route_lower_threshold[j] = 0;
@@ -3983,6 +4001,13 @@ void router_dally_commit(router_state * s,
             lp_io_write(lp->gid, snapshot_filename, written, snapshot_line);
         }
     }
+    if(msg->type == R_GROUP_BUFFER)
+    {
+    //    if(msg->rc_is_qos_set == 1) {
+            free(msg->rc_qos_status);
+            msg->rc_is_qos_set = 0;
+    //    }
+    }
 }
 
 /* initialize a dragonfly compute node terminal */
@@ -4294,7 +4319,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     if(dragonfly_rtr_rtg_log == NULL)
     {
         dragonfly_rtr_rtg_log = fopen(rtr_rtg_log, "w+");
-        fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold-for-min-score by-upper-threshold-for-nonmin-score by-nonmin-score");
+        fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold-for-min-score by-upper-threshold-for-nonmin-score by-nonmin-score group-link-updates");
     }
     #endif
     #if DEBUG_ROUTING_SCORE == 1
@@ -4356,6 +4381,16 @@ void router_dally_init(router_state * r, tw_lp * lp)
 
     r->vc_occupancy = (int**)calloc(p->radix , sizeof(int*));
     r->voq_occupancy = (int**)calloc(p->radix , sizeof(int*));
+    r->voq_occupancy_total = (int*)calloc(p->radix, sizeof(int));
+    r->group_link_my_ids = (int*)calloc(p->num_global_channels, sizeof(int));
+    r->group_link_status = (int*)calloc(p->num_groups, sizeof(int));
+    for(int i = 0; i < p->num_groups; i++)
+        r->group_link_status[i] = -1;
+    //r->group_link_status_agg = (int*)calloc(p->intra_grp_radix, sizeof(int));
+    //for(int i = 0; i < p->intra_grp_radix; i++)
+    //    r->group_link_status_agg[i] = -1;
+    r->group_link_update_count = 0;
+    r->group_link_status_time = (tw_stime*)calloc(p->num_groups, sizeof(tw_stime));
     r->downstream_credit = (int**)calloc(p->radix , sizeof(int*));
     r->in_send_loop = (int*)calloc(p->radix, sizeof(int));
     r->qos_data = (int**)calloc(p->radix, sizeof(int*));
@@ -4551,6 +4586,34 @@ void router_dally_init(router_state * r, tw_lp * lp)
         m2->magic = router_magic_num;
         tw_event_send(e2);
     }*/
+
+    if(ut_policy != NULL){ // populate my IDs
+        vector< Connection > my_global_links = r->connMan.get_connections_by_type(CONN_GLOBAL);
+        vector< Connection >::iterator itg = my_global_links.begin();
+        int i=0;
+        if(r->router_id == 1  && tw_now(lp) < 500){
+            printf("\n---------- Setup group IDS on router: %d", r->router_id);
+        }
+        for(; itg != my_global_links.end(); itg++)
+        {
+            // Get router's gid
+            //int id = itg->dest_gid;
+            //int dest_group_id =  id / p->num_routers;
+            r->group_link_my_ids[i] = itg->dest_group_id;
+            i++;
+        }
+    }
+    //if(strstr(ut_policy, "window") != NULL)
+    if(strcmp(ut_policy, "window") == 0)
+    {
+        tw_stime bcast_ts = ut_broadcast_window;
+        terminal_dally_message * m3;
+        tw_event * e3 = model_net_method_event_new(lp->gid, bcast_ts, lp,
+            DRAGONFLY_DALLY_ROUTER, (void**)&m3, NULL);
+        m3->type = R_GROUP_BROADCAST;
+        m3->magic = router_magic_num;
+        tw_event_send(e3);
+    }
 
     return;
 }	
@@ -5616,7 +5679,8 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
 #if PRINT_MSG_TIMES == 1
     /* We get the exact vcg set on the packet in case num_qos_levels == 0 */
     int vc_group = get_vcg_from_category(msg);
-    //if(tw_now(lp) >= 15000)
+    //if(tw_now(lp) >= 675000 && tw_now(lp) <= 700000)
+    if(tw_now(lp) >= 350000 && tw_now(lp) <= 375000)
     fprintf(rdfdally_file, "\n%lf %d %d %d %d %d %hi %hi %hi %lf %lf", tw_now(lp), s->terminal_id,
             codes_mapping_get_lp_relative_id(msg->sender_mn_lp,0,0), 
             vc_group, msg->my_g_hop, msg->my_l_hop, msg->nm_sgrp, msg->nm_igrp, msg->nm_dgrp, (tw_now(lp) - msg->travel_start_time),
@@ -6242,6 +6306,147 @@ static void router_credit_send(router_state * s, terminal_dally_message * msg,
     return;
 }
 
+// Broadcast the state of global channel loads to other routers in group - this could be combined with the function above
+static void router_buf_state_send(router_state * s, terminal_dally_message * msg, 
+  tw_lp * lp, int local_id, tw_lpid dst_lpid) {
+    tw_event * buf_e;
+    terminal_dally_message * buf_msg;
+
+    const dragonfly_param *p = s->params;
+
+    double broadcast_delay = 5;  // unused now, but may be used in the future. This can allow us to vary the time we broadcast updates
+
+    buf_e = model_net_method_event_new(dst_lpid, broadcast_delay, lp, DRAGONFLY_DALLY_ROUTER,
+            (void**)&buf_msg, NULL);
+    
+    // Copy port states to event message
+    // TODO: use more appropriate variable names instead RC-designated variables
+    buf_msg->rc_qos_status = (int *) calloc(p->num_global_channels*2, sizeof(int));
+
+    int dest_group_id;
+    for(int j = 0; j < p->num_global_channels; j++){ // Currently using an awkward layout: 1D array of group_ids followed by link states
+        dest_group_id = s->group_link_my_ids[j];
+        assert(dest_group_id >= 0 && dest_group_id < p->num_groups);
+
+        buf_msg->rc_qos_status[j] = dest_group_id;
+        buf_msg->rc_qos_status[j + p->num_global_channels] = s->group_link_status[dest_group_id]; //s->voq_occupancy_total[j];
+        
+        assert(s->group_link_status[dest_group_id] == -1 || s->group_link_status[dest_group_id] == 1);
+    }
+    //buf_msg->rc_is_qos_set = s->group_link_status_agg[local_id]; //s->voq_occupancy_total[j];
+
+    // Complete preparing and sending event
+    buf_msg->magic = router_magic_num;
+    buf_msg->saved_sample_time = tw_now(lp);
+    buf_msg->origin_router_id = local_id;
+    buf_msg->type = R_GROUP_BUFFER;
+
+    tw_event_send(buf_e);
+    return;
+}
+
+//TODO: need to find a more efficient way to write this function without all the lookups. Also, don't check/update all ports when only a single port occupancy changed -kevinB
+static void router_buf_notify_update(router_state * s, terminal_dally_message * msg, 
+  tw_lp * lp, int port) {
+    
+    const dragonfly_param *p = s->params;
+
+    if(p->adaptive_threshold_upper == -1) // Do nothing if the adaptive threshold is unset
+        return;
+
+    if(port >= 0 && port < p->radix){ // if we are supplied with a valid port
+        if(port < p->intra_grp_radix || port >= p->intra_grp_radix +  p->num_global_channels) // if port is not global, do nothing if the udpated port is not global
+            return;
+    } else
+        assert(port == -1); // The only acceptable non-valid port in this function is -1, which indicates a port was not supplied
+
+    int my_local_id = s->router_id % s->params->num_routers;
+    int dest_group_id = -1;
+    bool status_changed = false;
+
+    tw_stime min_update_window = 2; // Minimum time between make/posting status updates
+        // If it has been longer than min_update_window since the last update was posted, post update now
+        //if(tw_now(lp) - s->group_link_status_time[my_id] > min_update_window){
+    
+    // debug-ut
+    //if(s->router_id == 1 && tw_now(lp) < 500){
+    //    printf("\n -=-=-=-=-[%d(L: %d)] Broadcasting updates for groups |",s->router_id, my_local_id);
+    //}
+
+    vector< Connection > my_global_links = s->connMan.get_connections_by_type(CONN_GLOBAL);
+    vector< Connection >::iterator itg = my_global_links.begin();
+    for(; itg != my_global_links.end(); itg++)
+    {
+        // Get router's gid
+        int id = itg->dest_gid;
+        port = itg->port;
+        dest_group_id = itg->dest_group_id; //id / s->params->num_routers;
+        
+        // Check if global links went above or below the threshold based on last record for the link
+        //  state of '-1': link is at or below threshold
+        //  state of '1' : link is above threhsold
+        if(s->voq_occupancy_total[port] > p->adaptive_threshold_upper){
+            if(s->group_link_status[dest_group_id] == -1){
+                s->group_link_status[dest_group_id] = 1;
+                s->group_link_status_time[dest_group_id] = tw_now(lp);
+                s->group_link_update_count++;
+
+                status_changed = true;
+            }
+            assert(s->group_link_status[dest_group_id] == 1);
+
+        } else if(s->voq_occupancy_total[port] <= p->adaptive_threshold_upper){
+            //tw_output(lp,"\n == V:%d | T:%d", s->voq_occupancy_total[port], p->adaptive_threshold_upper);
+            if(s->group_link_status[dest_group_id] == 1){
+                s->group_link_status[dest_group_id] = -1;
+                s->group_link_status_time[dest_group_id] = tw_now(lp);
+                s->group_link_update_count++;
+
+                status_changed = true;
+            }
+            assert(s->group_link_status[dest_group_id] == -1);
+
+        } else
+            assert(0);
+
+        // debug-ut
+        //if(s->router_id == 1  && tw_now(lp) < 500){
+        //    printf("%d|",dest_group_id);
+        //}
+        assert(s->group_link_status[dest_group_id] == -1 || s->group_link_status[dest_group_id] == 1);
+    }
+    
+    // debug-ut
+    //if(s->router_id == 1 && tw_now(lp) < 500){
+    //    printf(" -> routers: [");
+    //}
+
+    if(status_changed){ // If any port status has changed, broadcast updated
+        vector< Connection > my_local_links = s->connMan.get_connections_by_type(CONN_LOCAL);
+        vector< Connection >::iterator itl = my_local_links.begin();
+        for(; itl != my_local_links.end(); itl++)
+        {
+            // Get router's gid
+            int id = itl->dest_gid;
+            tw_lpid router_dest_id;
+            codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, id / num_routers_per_mgrp, id % num_routers_per_mgrp, &router_dest_id);
+            
+            // debug-ut
+            //if(s->router_id == 1  && tw_now(lp) < 500){
+            //    printf("%d(%ld), ", id, router_dest_id);
+            //}
+
+            router_buf_state_send(s, msg, lp, my_local_id, router_dest_id); // TODO: rename these id variables
+        }
+    }
+    
+    // debug-ut
+    //if(s->router_id == 1  && tw_now(lp) < 500){
+    //    printf("] [T:%lf]", tw_now(lp));
+    //}
+
+}
+
 static void router_packet_receive_rc(router_state * s,
         tw_bf * bf,
         terminal_dally_message * msg,
@@ -6560,7 +6765,12 @@ static void router_packet_receive( router_state * s,
         msg_size = cur_chunk->msg.packet_size % s->params->chunk_size;
     } 
     s->voq_occupancy[output_port][downstream_chan] += msg_size; // KBEdit - downstream_chan added here
+    s->voq_occupancy_total[output_port] += msg_size;
     //s->vc_occupancy[input_port][output_chan] += msg_size;  // KBEdit - INPUT PORT used here
+
+    if(strcmp(ut_policy, "instant") == 0){
+        router_buf_notify_update(s, msg, lp, output_port); // TODO: maybe msg is not the right paramter
+    }
 
     // Trigger send event, if necessary
     if(s->in_send_loop[output_port] == 0 && s->downstream_credit[output_port][downstream_chan] >= s->params->chunk_size) {
@@ -6934,12 +7144,21 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     assert(output_chan == cur_entry->msg.downstream_chan);
     //s->vc_occupancy[input_port][output_chan] -= msg_size;  // KBEdit - INPUT PORT used here
     s->voq_occupancy[output_port][output_chan] -= msg_size;
+    s->voq_occupancy_total[output_port] -= msg_size;
+    assert(s->voq_occupancy_total[output_port] >= 0);
+    if(s->voq_occupancy_total[output_port] <= 0){
+        s->qos_green_total[output_port][0]++;
+    }
     s->downstream_credit[output_port][cur_entry->msg.downstream_chan] -= s->params->chunk_size;
     assert(//s->vc_occupancy[input_port][output_chan] >= 0 &&   // KBEdit - INPUT PORT used here
             s->voq_occupancy[output_port][output_chan] >= 0 &&
             s->downstream_credit[output_port][cur_entry->msg.downstream_chan] >= 0);
     //KBEdit Fix credit senting
     s->qos_data[output_port][vcg] += msg_size; 
+
+    if(strcmp(ut_policy, "instant") == 0){
+        router_buf_notify_update(s, msg, lp, output_port); // TODO: maybe msg is not the correct thing to send
+    }
 
     msg->saved_app_id = cur_entry->msg.app_id;
     if (g_congestion_control_enabled) {
@@ -7102,8 +7321,8 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
                 tw_error(TW_LOC, "\n invalid output chan %d last-hop %d", head->msg.saved_channel, head->msg.last_hop);
         }
         }/
-        router_credit_send(s, &head->msg, lp, 1, &(msg->num_rngs)); 
-        append_to_terminal_dally_message_list(s->pending_msgs[indx], 
+        router_credit_send(s, &head->msg, lp, 1, &(msg->num_rngs));
+        append_to_terminal_dally_message_list(s->pending_msgs[indx],
         s->pending_msgs_tail[indx], output_chan, head);
         s->vc_occupancy[indx][output_chan] += s->params->chunk_size;
         s->queued_count[indx] -= s->params->chunk_size; 
@@ -7138,6 +7357,81 @@ static void router_buf_update(router_state * s, tw_bf * bf, terminal_dally_messa
         }
     }
     return;
+}
+
+static void router_group_buf_update_rc(router_state * s,
+        tw_bf * bf,
+        terminal_dally_message * msg,
+        tw_lp * lp)
+{
+
+}
+
+static void router_group_buf_update(router_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
+{// TODO: Add RC
+ 
+    const dragonfly_param *p = s->params;
+
+    // Get source router offset within group
+    int local_id = msg->origin_router_id;
+    int group_id = msg->vc_index;
+
+    // Record time of update
+    s->group_link_status_time[group_id] = msg->saved_sample_time;
+    
+    // debug-ut
+    //if(s->router_id < 16 && s->router_id != 1  && tw_now(lp) < 500){
+    //    printf("\n ========== [%d] Recieving updates from local ID: %d for groups |", s->router_id, local_id);
+    //}
+    // Copy updated states
+    int dest_group_id;
+    for(int j = 0; j < p->num_global_channels; j++) { // Currently using an awkward layout: 1D array of group_ids followed by link states
+        dest_group_id = msg->rc_qos_status[j];
+        assert(dest_group_id >= 0 && dest_group_id < p->num_groups);
+        s->group_link_status[dest_group_id] = msg->rc_qos_status[j + p->num_global_channels];
+
+        // debug-ut
+        //if(s->router_id  < 16 && s->router_id != 1  && tw_now(lp) < 500){
+        //    printf("%d|", dest_group_id);
+        //}
+        assert(s->group_link_status[dest_group_id] == -1 || s->group_link_status[dest_group_id] == 1);
+    }
+    //s->group_link_status_agg[local_id] = msg->rc_is_qos_set;
+    //for(int i = p->intra_grp_radix; i < p->intra_grp_radix +  p->num_global_channels; i++){
+    //    s->group_link_status[src_id_local][i] = msg->rc_qos_status[i - p->intra_grp_radix];
+    
+    // debug-ut
+    //if(s->router_id  < 16 && s->router_id != 1 && tw_now(lp) < 500){
+    //    printf(" [T:%lf]", tw_now(lp));
+    //}
+    
+}
+
+static void router_group_broadcast_rc(router_state * s,
+        tw_bf * bf,
+        terminal_dally_message * msg,
+        tw_lp * lp)
+{
+
+}
+
+static void router_group_broadcast(router_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp)
+{// TODO: Add RC
+ 
+
+    router_buf_notify_update(s, msg, lp, -1);
+    // Get source router offset within group
+    if(strcmp(ut_policy, "window") == 0)
+    {
+        tw_stime bcast_ts = ut_broadcast_window;
+        terminal_dally_message * m3;
+        tw_event * e3 = model_net_method_event_new(lp->gid, bcast_ts, lp,
+            DRAGONFLY_DALLY_ROUTER, (void**)&m3, NULL);
+        m3->type = R_GROUP_BROADCAST;
+        m3->magic = router_magic_num;
+        tw_event_send(e3);
+    }
+
 }
 
 void 
@@ -7194,6 +7488,9 @@ void router_dally_event(router_state * s, tw_bf * bf, terminal_dally_message * m
 
     s->last_time = tw_now(lp);
     
+    // TO CLEAR BY KEVIN - used for debugging UT
+    //if(tw_now(lp) > 75000.0 && msg->type != R_BANDWIDTH)
+    //    return;
     assert(msg->magic == router_magic_num);
     switch(msg->type)
     {
@@ -7210,6 +7507,16 @@ void router_dally_event(router_state * s, tw_bf * bf, terminal_dally_message * m
         case R_BUFFER:
             // printf("%d: router buf update\n", s->router_id);
             router_buf_update(s, bf, msg, lp);
+        break;
+
+        case R_GROUP_BUFFER:
+            //printf("\n =-=-=-=-=-=- %d: group router buf update\n", s->router_id);
+            router_group_buf_update(s, bf, msg, lp);
+        break;
+
+        case R_GROUP_BROADCAST:
+            printf("\n =-=-=-=-=-=- %d: group router buf broadcast\n", s->router_id);
+            router_group_broadcast(s, bf, msg, lp);
         break;
 
         case R_MIN_SWITCH:
@@ -7298,6 +7605,14 @@ void router_dally_rc_event_handler(router_state * s, tw_bf * bf,
 
         case R_BUFFER: 
             router_buf_update_rc(s, bf, msg, lp);
+        break;
+        
+        case R_GROUP_BUFFER:
+            router_group_buf_update_rc(s, bf, msg, lp);
+        break;
+        
+        case R_GROUP_BROADCAST:
+            router_group_broadcast_rc(s, bf, msg, lp);
         break;
         
         case R_BANDWIDTH:
@@ -7749,11 +8064,52 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         // Apply bias and score adjustments, if applicable. Last parameter group_code = 2 (dest group)
         min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, false, 2);
         nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, false, 2);
+        
+        bool upper_threshold_exceeded = false;
+        if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
+            exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
+            upper_threshold_exceeded = true;
+        }
 
-        if(min_score <= nonmin_score)
+        /* Debugging code for tracking how routing decisions are made. Added by Kevin Brown on 2021/08 during routing+qos study*/
+        #if DEBUG_ROUTING_DECISION == 1
+        int vcg = 0;
+        if (s->params->num_qos_levels > 1)
+            vcg = get_vcg_from_category(msg);
+
+        if (upper_threshold_exceeded){ // log decision due to upper threshold
+            if (min_score <= nonmin_score) {
+                s->route_upper_threshold_for_min_score[vcg]++;
+            } else {
+                s->route_upper_threshold_for_nonmin_score[vcg]++;
+            }
+        } else { // log decision due to scores or lower threshold
+            if (min_score <= nonmin_score) {
+                s->route_min_score[vcg]++;
+                if (min_score > adaptive_threshold && !upper_threshold_exceeded)
+                    s->route_min_score_only[vcg]++;
+            } else {
+                if (min_score <= adaptive_threshold){
+                    s->route_lower_threshold[vcg]++;
+                } else {
+                        s->route_nonmin_score[vcg]++;
+                }
+            }
+        }
+        #endif
+
+        if (min_score <= adaptive_threshold ||
+                min_score <= nonmin_score ||
+                upper_threshold_exceeded)
             return best_min_conn;
-        else 
+        else {
             return best_nonmin_conn;
+        }
+
+        //if(min_score <= nonmin_score)
+        //    return best_min_conn;
+        //else 
+        //    return best_nonmin_conn;
 
     }
     // // End Local Destination Group Routing -------------
@@ -7824,6 +8180,12 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     #endif
 
     if ((msg->path_type == NON_MINIMAL) && (msg->is_intm_visited != 1)) { //if we're nonminimal and haven't reached the intermediate group yet
+        #if DEBUG_ROUTING_DECISION == 1
+        int vcg = 0;
+        if (s->params->num_qos_levels > 1)
+            vcg = get_vcg_from_category(msg);
+        s->route_nonmin_score[vcg]++;
+        #endif
         //must pick non-minimal (if we have visited, we can pick minimal then as nonminimal will be an empty vector)
         return best_nonmin_conn;
     }
@@ -7837,16 +8199,27 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
         if (msg->last_hop == GLOBAL)
             is_global_adaptive = false;
+    } else{
+        // confirm that we're in the source group
+        assert(my_group_id == msg->origin_router_id / s->params->num_routers);
     }
+    assert(group_code == 0 || group_code == 1); // may be redunant
 
     min_score = dfdally_apply_advanced_scoring(s, bf, msg, best_min_conn, lp, C_MIN, min_score, is_global_adaptive, group_code);
     nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, is_global_adaptive, group_code);
 
-    // KEV TODO test with this only for global. Now it's affecting both global decision and local intermediate group decisions.
     bool upper_threshold_exceeded = false;
-    if (exceed_adaptive_upper_threshold(s, bf, msg, best_min_conn, C_MIN) == true &&
-            exceed_adaptive_upper_threshold(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){ // if buffer are over capacity
-        upper_threshold_exceeded = true;
+    //if (group_code == 0 && exceed_adaptive_upper_threshold(s, bf, msg, best_min_conn, C_MIN) == true &&
+    if (group_code == 0){
+        if (exceed_adaptive_upper_threshold(s, bf, msg, best_min_conn, C_MIN, fdest_group_id) == true &&
+            exceed_adaptive_upper_threshold(s, bf, msg, best_nonmin_conn, C_NONMIN, fdest_group_id) == true){ // if buffer are over capacity
+            upper_threshold_exceeded = true;
+        }
+    } else if (group_code == 1){ // Check in intermediate group
+        if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
+            exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
+            upper_threshold_exceeded = true;
+        }
     }
 
     /* Debugging code for tracking how routing decisions are made. Added by Kevin Brown on 2021/08 during routing+qos study*/
@@ -9066,7 +9439,7 @@ struct model_net_method dragonfly_dally_router_method =
 
 //     if(node < 0 || node >= params->total_terminals)
 //         return -1;
-  
+
 //     if(size < 3)
 //         return -1;
 
@@ -9074,7 +9447,7 @@ struct model_net_method dragonfly_dally_router_method =
 //     int rid_global = node / params->num_cn;
 //     int gid = rid_global / params->num_routers;
 //     int lid = node % params->num_cn;
-   
+
 //     location[0] = gid;
 //     location[1] = rid;
 //     location[2] = lid;
@@ -9084,12 +9457,11 @@ struct model_net_method dragonfly_dally_router_method =
 
 // static router_id_t dragonfly_dally_get_router_from_compute_node(void* topo, cn_id_t node) {
 //         // TODO
-// 	// Given a node id, this function returns the id of the router connected to the node,
-// 	// or -1 if the node id is not valid.
+//     // Given a node id, this function returns the id of the router connected to the node,
+//     // or -1 if the node id is not valid.
 //     const dragonfly_param * params = &all_params[num_params-1];
 //     if(!params)
 //         return -1;
-
 //     if(node < 0 || node >= params->total_terminals)
 //         return -1;
     
