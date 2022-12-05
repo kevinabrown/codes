@@ -197,7 +197,8 @@ enum TRAFFIC
     STENCIL = 4, /* sends message to 4 nearby neighbors */
     PERMUTATION = 5,
     BISECTION = 6,
-    NEXT_GROUP_8320NODES = 7
+    NEXT_GROUP_8320NODES = 7,
+    UNIFORM_GLOBAL_8320NODES = 8
 };
 struct mpi_workload_sample
 {
@@ -973,9 +974,35 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
 	    /* Special case next-group pattern on 8320-node system
 	     * (128 nodes per group)
 	     * */
+            assert(num_clients == 8320);
             length = 1;
             dest_svr = (int*) calloc(1, sizeof(int));
 	        dest_svr[0] = (s->local_rank + 128) % num_clients;
+        }
+        break;
+        case UNIFORM_GLOBAL_8320NODES:
+        {
+            // Supports only 8320-node dragonfly with 128 nodes per group
+            assert(num_clients == 8320);
+
+            bf->c1 = 1;
+            length = 1;
+            dest_svr = (int*) calloc(1, sizeof(int));
+
+            // get node's position in group
+            int nid_in_group = s->local_rank % 128;
+
+            // Get a random destination offset without including
+            //  nodes in current group
+            dest_svr[0] = tw_rand_integer(lp->rng,
+                    128 - nid_in_group,
+                    num_clients - nid_in_group - 1);
+
+            // calculate destination
+            dest_svr[0] = (s->local_rank + dest_svr[0]) % num_clients;
+
+            // ensure source != destination
+            assert(dest_svr[0] != s->local_rank);
         }
         break;
         default:
@@ -2481,7 +2508,7 @@ void nw_test_init(nw_state* s, tw_lp* lp)
    if(strncmp(file_name_of_job[lid.job], "synthetic", 9) == 0)
    {
         sscanf(file_name_of_job[lid.job], "synthetic%d", &synthetic_pattern);
-        if(synthetic_pattern <=0 || synthetic_pattern > 7)
+        if(synthetic_pattern <=0 || synthetic_pattern > 8)
         {
             printf("\n Undefined synthetic pattern: setting to uniform random ");
             s->synthetic_pattern = 1;
