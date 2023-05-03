@@ -1597,6 +1597,9 @@ static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf
     for(int i = 0; i < num_to_compare; i++)
     {
         scores[i] = dfdally_score_connection(s, bf, msg, lp, conns[i], C_MIN);
+        //if (conns[i].conn_type == CONN_GLOBAL){ // KBDEBUG - adding wight for local port
+        //    scores[i] = scores[i] * 1.5;
+        //}
         #if DEBUG_ROUTING_SCORE == 1
         if(s->router_id == DEBUG_ROUTING_SCORE_ROUTER1 || s->router_id == DEBUG_ROUTING_SCORE_ROUTER2){
             fprintf(dragonfly_route_score_log, "%d:%d", conns[i].port, scores[i]);
@@ -1686,6 +1689,9 @@ static Connection dfdally_get_best_from_k_connection_set(router_state *s, tw_bf 
     set<Connection>::iterator it = conns.begin();
     for(int i = 0; i < k; i++)
     {
+        if (conns.size() == 0)
+            break;  // prevents trying to pick more than the available conns
+
         int offset = tw_rand_integer(lp->rng, 0, conns.size()-1);
         msg->num_rngs++;
         advance(it, offset);
@@ -1728,11 +1734,48 @@ static vector< Connection > dfdally_poll_k_connections(router_state *s, tw_bf *b
     // if (k > conns.size())
     //     tw_error(TW_LOC, "Attempted to poll k random connections but k (%d) is greater than number of connections (%d)",k,conns.size());
 
+
+// use vec
     // create set of unique random k indicies
-    int last_sel = 0;
-    set< int > rand_sels;
-    for (int i = 0; i < k; i++)
+    int last_sel = 0, i = 0;
+    vector< int > rand_sels;
+    for (i = 0; i < k; i++)
     {
+        if(conns.size() == rand_sels.size()) //preventy trying to pick more than the available options
+            break;
+
+        int rand_int = tw_rand_integer(lp->rng, 0, (conns.size() - 1) - rand_sels.size());
+        int attempt_offset = (last_sel + rand_int) % conns.size(); //get a hopefully unused index - this method of sampling without replacement results in only about
+        while (std::count(rand_sels.begin(), rand_sels.end(), attempt_offset)) //increment till we find an unused index
+        {
+            attempt_offset = (attempt_offset + 1) % conns.size();
+        }
+        rand_sels.push_back(attempt_offset);
+        last_sel = attempt_offset;
+    }
+    msg->num_rngs += i; // we only used the rng up to i times
+
+    // use random k set to create vector of k connections
+    for(vector<int>:: iterator it = rand_sels.begin() ; it != rand_sels.end() ; it++)
+    {
+        k_conns.push_back(conns[*it]);
+    }
+
+
+
+
+
+
+/*
+// use set
+    // create set of unique random k indicies
+    int last_sel = 0, i = 0;
+    set< int > rand_sels;
+    for (i = 0; i < k; i++)
+    {
+        if(conns.size() == rand_sels.size()) //preventy trying to pick more than the available options
+            break;
+
         int rand_int = tw_rand_integer(lp->rng, 0, (conns.size() - 1) - rand_sels.size());
         int attempt_offset = (last_sel + rand_int) % conns.size(); //get a hopefully unused index - this method of sampling without replacement results in only about
         while (rand_sels.count(attempt_offset) != 0) //increment till we find an unused index
@@ -1742,13 +1785,16 @@ static vector< Connection > dfdally_poll_k_connections(router_state *s, tw_bf *b
         rand_sels.insert(attempt_offset);
         last_sel = attempt_offset;
     }
-    msg->num_rngs += k; // we only used the rng k times
+    msg->num_rngs += i; // we only used the rng up to i times
 
     // use random k set to create vector of k connections
     for(set<int>:: iterator it = rand_sels.begin() ; it != rand_sels.end() ; it++)
     {
         k_conns.push_back(conns[*it]);
     }
+*/
+
+
 
     return k_conns;
 }
@@ -1924,6 +1970,7 @@ void dragonfly_print_params(const dragonfly_param *p, FILE * st)
     fprintf(st,"\trouting =                %s\n",get_routing_alg_chararray(routing));
     fprintf(st,"\tadaptive_threshold =     %d\n",p->adaptive_threshold);
     fprintf(st,"\tadaptive_threshold_upper=%d\n",p->adaptive_threshold_upper);
+    fprintf(st,"\tglobal_k_picks=          %d\n",p->global_k_picks);
     fprintf(st,"\tmax hops notification =  %d\n",p->max_hops_notify);
     fprintf(st,"\tnum_qos_levels =         %d\n",p->num_qos_levels);
     fprintf(st,"\tqos_bucket_max =         %d\n",qos_bucket_max);
@@ -7735,8 +7782,13 @@ static vector< Connection > get_legal_minimal_stops(router_state *s, tw_bf *bf, 
     int my_group_id = s->group_id;
     int origin_group_id = msg->origin_router_id / s->params->num_routers;
     int fdest_group_id = fdest_router_id / s->params->num_routers;
-
+    
     if (my_group_id != fdest_group_id) { //we're in origin group or intermediate group - either way we need to route to fdest group minimally
+        //if (my_group_id == origin_group_id) { // this block is used to force global non-min routing during debuging KBDEBUG
+        //    vector< Connection > empty;
+        //    return empty;
+        //}
+
         vector< Connection > conns_to_dest_group = s->connMan.get_connections_to_group(fdest_group_id);
         if (conns_to_dest_group.size() > 0) { //then we have a direct connection to dest group
             return conns_to_dest_group; // --------- return direct connection
@@ -7872,6 +7924,234 @@ static vector< Connection > get_legal_nonminimal_stops(router_state *s, tw_bf *b
                     return valid_intm_router_conns;
                 else
                     return dfdally_poll_k_connections(s, bf, msg, lp, valid_intm_router_conns, 2);
+            }
+        }
+        // else we have already taken a local hop within this group or we don't have enough available VC for a local non-min hop at this stage
+        return empty;
+    }
+    else if (my_group_id == fdest_group_id)
+    {
+        //same as intermediate, force minimal choices
+        vector< Connection > empty;
+        return empty;
+    }
+    else
+    {
+        tw_error(TW_LOC, "Invalid group somehow: not origin, not intermediate, and not fdest group\n");
+        vector< Connection > empty;
+        return empty;
+    }
+}
+
+
+// WIP - extending nonminmin routing to be more in-line with the progressive adaptive policy
+// - This has been extended to support local (intra-group) nonmin hop within the intermediate group.
+//   Local nonmin hop within the destination group is handled elsewhere and not allowed when src group != dst group.
+static vector< Connection > get_legal_nonminimal_stops_new(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+    int my_router_id = s->router_id;
+    int my_group_id = s->group_id;
+    int origin_group_id = msg->origin_router_id / s->params->num_routers;
+    int fdest_group_id = fdest_router_id / s->params->num_routers;
+    bool in_intermediate_group = (my_group_id != origin_group_id) && (my_group_id != fdest_group_id);
+    //int preset_intm_group_id = msg->intm_grp_id;
+
+
+    if (my_group_id == origin_group_id) { // We are in origin group. Local nonmin is not allowed, only global nonmin
+        if (my_router_id == msg->origin_router_id) { //then we are able to route within our own group if necessary
+            
+            //msg->num_rngs++;
+            //int rand_group_id;
+
+            // Get all potential intermediate groups
+            vector<int> group_list;
+            // KBDEBUG passed - group list all groups
+            //if(my_router_id == 0) tw_output(lp,"\nDEBUG[0] GROUP LIST: %d %d ", origin_group_id, fdest_group_id); //KBDEBUG
+            for (int i = s->params->num_groups*s->plane_id; i < s->params->num_groups*(s->plane_id+1); i++)
+            {
+                if (NONMIN_INCLUDE_SOURCE_DEST){ //then any group is a valid intermediate group
+                    group_list.push_back(i);
+                //if(my_router_id == 0) tw_output(lp,"%d ", i); //KBDEBUG
+                }
+                else if ((i != origin_group_id) && (i != fdest_group_id)) { //then we don't consider source or dest groups as valid intermediate groups
+                    group_list.push_back(i);
+                //if(my_router_id == 0) tw_output(lp,"%d ", i); //KBDEBUG
+                }
+            }
+
+ // Use sets for lists - automatically orders elements
+
+            // Get global_k_picks*2 options from the list of intermediate groups
+            int last_sel = 0, i = 0;
+            set< int > rand_sels;
+            // KBDEBUG passed - group list all groups
+            //if(my_router_id == 0) tw_output(lp,"\nDEBUG[1] GROUP LIST: %d %d ", origin_group_id, fdest_group_id); //KBDEBUG
+            for (i = 0; i < s->params->global_k_picks*2; i++)
+            //for (i = 0; i < 4; i++)
+            {
+                if(group_list.size() == rand_sels.size()) // Prevents trying to pick more groups than are available
+                    break;
+
+                int rand_int = tw_rand_integer(lp->rng, 0, (group_list.size() - 1) - rand_sels.size());
+                int attempt_offset = (last_sel + rand_int) % group_list.size(); //get a hopefully unused index - this method of sampling without replacement results in only about
+                while (rand_sels.count(attempt_offset) != 0) //increment till we find an unused index
+                {
+                    attempt_offset = (attempt_offset + 1) % group_list.size();
+                }
+                rand_sels.insert(attempt_offset);
+                last_sel = attempt_offset;
+                //if(my_router_id == 0) tw_output(lp,"%d ", attempt_offset); //KBDEBUG
+            }
+            msg->num_rngs += i;
+
+            set< int > selected_groups;
+            //if(my_router_id == 0) tw_output(lp,"\nDEBUG[2] GROUP LIST: %d %d ", origin_group_id, fdest_group_id); //KBDEBUG
+            for(set<int>:: iterator it = rand_sels.begin() ; it != rand_sels.end() ; it++)
+            {
+                selected_groups.insert(group_list[*it]);
+                //if(my_router_id == 0) tw_output(lp,"%d ", group_list[*it]); //KBDEBUG
+            }
+            //if(my_router_id == 0) tw_error(TW_LOC, "Done DEBUGGING Router.\n"); //KBDEBUG
+
+
+
+
+/*
+// Use vectors for lists - does not automatically order elements
+
+            // Get global_k_picks*2 options from the list of intermediate groups
+            int last_sel = 0, i = 0;
+            vector< int > rand_sels;
+            // KBDEBUG passed - group list all groups
+            //if(my_router_id == 0) tw_output(lp,"\nDEBUG[1] GROUP LIST: %d %d ", origin_group_id, fdest_group_id); //KBDEBUG
+            //for (i = 0; i < 4; i++)
+            for (i = 0; i < s->params->global_k_picks*2; i++)
+            {
+                if(group_list.size() == rand_sels.size()) // Prevents trying to pick more groups than are available
+                    break;
+
+                int rand_int = tw_rand_integer(lp->rng, 0, (group_list.size() - 1) - rand_sels.size());
+                int attempt_offset = (last_sel + rand_int) % group_list.size(); //get a hopefully unused index - this method of sampling without replacement results in only about
+                //while (rand_sels.count(attempt_offset) != 0) //increment till we find an unused index
+                while (std::count(rand_sels.begin(), rand_sels.end(), attempt_offset))
+                {
+                    attempt_offset = (attempt_offset + 1) % group_list.size();
+                }
+                rand_sels.push_back(attempt_offset);
+                last_sel = attempt_offset;
+                //if(my_router_id == 0) tw_output(lp,"%d ", attempt_offset); //KBDEBUG
+            }
+            msg->num_rngs += i;
+
+            vector< int > selected_groups;
+            //if(my_router_id == 0) tw_output(lp,"\nDEBUG[2] GROUP LIST: %d %d ", origin_group_id, fdest_group_id); //KBDEBUG
+            for(vector<int>:: iterator it = rand_sels.begin() ; it != rand_sels.end() ; it++)
+            {
+                selected_groups.push_back(group_list[*it]);
+                //if(my_router_id == 0) tw_output(lp,"%d ", group_list[*it]); //KBDEBUG
+            }
+            //if(my_router_id == 0) tw_error(TW_LOC, "Done DEBUGGING Router.\n"); //KBDEBUG
+
+*/
+
+
+
+
+            // Get connects to potential intermediate groups
+            vector< Connection > conns_to_intm_group;
+            for(set<int>:: iterator it = selected_groups.begin() ; it != selected_groups.end() ; it++){
+            //for(vector<int>:: iterator it = selected_groups.begin() ; it != selected_groups.end() ; it++){
+                // Get direct (global) links
+                vector< Connection > tmp_conns = s->connMan.get_connections_to_group(*it);
+                if(tmp_conns.size() > 0){
+                    conns_to_intm_group.insert(conns_to_intm_group.end(), tmp_conns.begin(), tmp_conns.end());
+                }
+                else{
+                    // no direct links exist here, so get indirect links
+                    tmp_conns = s->connMan.get_routed_connections_to_group(*it, true);
+                    if(tmp_conns.size() > 0){
+                        conns_to_intm_group.insert(conns_to_intm_group.end(), tmp_conns.begin(), tmp_conns.end());
+                    }
+                }
+            //if(msg->src_terminal_id == 0)
+            //       printf("\nRID %d IGID %d", 
+            //               s->router_id, *it);
+            }
+
+            //if(msg->packet_ID == LLU(TRACK_PKT) && msg->src_terminal_id == T_ID)
+            //if(msg->src_terminal_id == T_ID)
+            //        printf("\n TRACKING NONMIN SRC-RTR (id: %d): group_list:%d rand_sels:%d selected_groups:%d conns_to_intm_group:%d", 
+            //                s->router_id, group_list.size(), rand_sels.size(), selected_groups.size(), conns_to_intm_group.size());
+
+            return conns_to_intm_group;
+
+        } else{ // we have already taken a local hop and should route globally.
+            
+            // Get global links on current router
+            vector< Connection > global_conns = s->connMan.get_connections_by_type(CONN_GLOBAL);
+            vector< Connection > conns_to_intm_group;
+            for (vector<Connection>::iterator it = global_conns.begin(); it != global_conns.end(); it ++) {
+                Connection conn = *it;
+                if (NONMIN_INCLUDE_SOURCE_DEST){ //then any group I connect to is valid
+                    conns_to_intm_group.insert(conns_to_intm_group.begin(), conn);
+                }
+                else {
+                    if ((conn.dest_group_id != fdest_group_id) && (conn.dest_group_id != origin_group_id))
+                        conns_to_intm_group.insert(conns_to_intm_group.begin(), conn);
+                }
+            }
+
+            //if(msg->packet_ID == LLU(TRACK_PKT) && msg->src_terminal_id == T_ID)
+            //        printf("\n TRACKING NONMIN SRC-GRP (id: %d): global_conns:%d conns_to_intm_group:%d ", 
+            //                s->router_id, global_conns.size(), conns_to_intm_group.size());
+
+            return conns_to_intm_group;
+        }
+    }
+    else if (in_intermediate_group) {
+        vector< Connection > empty;
+
+        // Identify channel within the VCG
+        int vcs_per_qos = s->params->num_vcs / s->params->num_qos_levels;
+        int prev_vcg_chan = msg->output_chan % vcs_per_qos;
+
+        if (msg->last_hop == GLOBAL && prev_vcg_chan < 1) { // We are in the first router of the intermedeiate group and have enough free VCs for intra-group nonmin
+            vector< Connection > conns_to_dest_group = s->connMan.get_connections_to_group(fdest_group_id);
+            vector< Connection > valid_intm_router_conns;
+
+            if (conns_to_dest_group.size() > 0) { //then we have a direct connection to dest group
+                // Return empty and leave this hop to get_legal_minimal_stops()
+                return empty;
+            }
+            else { // We don't have a direct connection, so we pick an intermediate router that also does not have a direct connect to the destination group
+
+                // First find connections to routers that have direct connections to destination group
+                vector<Connection> exit_conns = s->connMan.get_routed_connections_to_group(fdest_group_id, true);
+
+                // Find all connections and remove the ones on the local minimal paths
+                vector< Connection > local_conns = s->connMan.get_connections_by_type(CONN_LOCAL);
+                for (vector<Connection>::iterator it = local_conns.begin(); it != local_conns.end(); it ++) {
+                    Connection conn = *it;
+                    int i, found = 0;
+                    for (i = 0; i < exit_conns.size(); i ++){
+                        if (exit_conns[i].dest_gid == conn.dest_gid) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (found) { // this local conn leads to an exit router, remove it so we don't have to search it again
+                        exit_conns.erase(exit_conns.begin() + i);
+                    }
+                    else { // this location conn is valid since it does not lead to an exit router
+                        valid_intm_router_conns.insert(valid_intm_router_conns.begin(), conn);
+                    }
+                }
+
+                // Return up to global_k_picks connections // TODO: Consider creating a new parameter called local_k_picks
+                if (valid_intm_router_conns.size() <= s->params->global_k_picks)
+                    return valid_intm_router_conns;
+                else
+                    return dfdally_poll_k_connections(s, bf, msg, lp, valid_intm_router_conns, s->params->global_k_picks);
             }
         }
         // else we have already taken a local hop within this group or we don't have enough available VC for a local non-min hop at this stage
@@ -8132,12 +8412,13 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     // The check for detination group local routing has already been completed - we can assume we're not in the destination group
 
     // are we in the intermediate group?
-    if (my_group_id == msg->intm_grp_id)
+    //if (my_group_id == msg->intm_grp_id)
+    if ((my_group_id != origin_group_id) && (my_group_id != fdest_group_id))
         msg->is_intm_visited = 1;
 
     Connection nextStopConn;
     vector< Connection > poss_min_next_stops = get_legal_minimal_stops(s, bf, msg, lp, fdest_router_id);
-    vector< Connection > poss_nonmin_next_stops = get_legal_nonminimal_stops(s, bf, msg, lp, fdest_router_id);
+    vector< Connection > poss_nonmin_next_stops = get_legal_nonminimal_stops_new(s, bf, msg, lp, fdest_router_id);
 
     Connection best_min_conn, best_nonmin_conn;
     ConnectionType conn_type_of_mins, conn_type_of_nonmins;
@@ -8157,7 +8438,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 0); // 0 for min connection type
     }
     #endif
-    if (conn_type_of_mins == CONN_GLOBAL)
+    if (conn_type_of_mins == CONN_GLOBAL)  // KBDEBUG
         best_min_conn = dfdally_get_best_from_k_connections(s, bf, msg, lp, poss_min_next_stops, s->params->global_k_picks);
     else
         best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_min_next_stops); //could use from_k_connections function but that's very expensive when k == size of input connections
@@ -8168,7 +8449,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         fprintf(dragonfly_route_score_log, "\n %.0f %d %d %d ", tw_now(lp), s->router_id, get_vcg_from_category(msg), 1); // 1 for non-min connection type
     }
     #endif
-    if (conn_type_of_nonmins == CONN_GLOBAL)
+    if (conn_type_of_nonmins == CONN_GLOBAL) // KBDEBUG
         best_nonmin_conn = dfdally_get_best_from_k_connections(s, bf, msg, lp, poss_nonmin_next_stops, s->params->global_k_picks);
     else
         best_nonmin_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_nonmin_next_stops);
@@ -8204,7 +8485,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     //  only global decisions in the source group and local decisions in the intermediate group should be handled.
     int group_code = 0;  // group_code: 0 - source group, 1 - intermediate group,  2 - destination group
     bool is_global_adaptive = true;
-    if (my_group_id == msg->intm_grp_id) {
+    if ((my_group_id != origin_group_id) && (my_group_id != fdest_group_id)) {
         group_code = 1;
 
         if (msg->last_hop == GLOBAL)
