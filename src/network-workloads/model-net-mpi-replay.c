@@ -198,7 +198,8 @@ enum TRAFFIC
     PERMUTATION = 5,
     BISECTION = 6,
     NEXT_GROUP_8320NODES = 7,
-    UNIFORM_GLOBAL_8320NODES = 8
+    UNIFORM_GLOBAL_8320NODES = 8,
+    UNIFORM_SPREAD = 9
 };
 struct mpi_workload_sample
 {
@@ -1003,6 +1004,15 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
 
             // ensure source != destination
             assert(dest_svr[0] != s->local_rank);
+        }
+        break;
+        case UNIFORM_SPREAD:
+        {
+            length = 1;
+            int my_dst_group = 8 - (s->local_rank % 9);
+            int my_dst_in_group = s->local_rank % 8;
+            dest_svr = (int*) calloc(1, sizeof(int));
+            dest_svr[0] = ((my_dst_group*8) + my_dst_in_group) % num_clients;
         }
         break;
         default:
@@ -2508,7 +2518,7 @@ void nw_test_init(nw_state* s, tw_lp* lp)
    if(strncmp(file_name_of_job[lid.job], "synthetic", 9) == 0)
    {
         sscanf(file_name_of_job[lid.job], "synthetic%d", &synthetic_pattern);
-        if(synthetic_pattern <=0 || synthetic_pattern > 8)
+        if(synthetic_pattern <=0 || synthetic_pattern > 9)
         {
             printf("\n Undefined synthetic pattern: setting to uniform random ");
             s->synthetic_pattern = 1;
@@ -3336,7 +3346,6 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
   tw_comm_set(MPI_COMM_CODES);
 
   g_tw_ts_end = s_to_ns(60*60); /* one hour, in nsecs */
-
   workload_type[0]='\0';
   tw_opt_add(app_opt);
   tw_opt_add(cc_app_opt);
