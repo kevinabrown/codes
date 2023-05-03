@@ -619,7 +619,7 @@ struct router_state
     int* voq_occupancy_total;
     int* group_link_my_ids;
     int* group_link_status;
-    //int* group_link_status_agg;
+    int* group_link_status_agg;
     int group_link_update_count;
     tw_stime* group_link_status_time;
     int64_t* link_traffic;
@@ -1447,10 +1447,9 @@ static inline bool exceed_adaptive_upper_threshold(router_state *s, tw_bf *bf, t
         if(s->group_link_status[fdest_group_id] == 1)
             return true;
     }else if(conn.conn_type == CONN_LOCAL && c_minimality != C_MIN){
-        //if(s->group_link_status_agg[conn.dest_gid / s->params->num_routers] == 1) // Bug: this was getting local group instead of caculation
-        //if(s->group_link_status_agg[conn.dest_gid % s->params->num_routers] == 1) // depecated? This was checking the load on all ports - not necesary
-        assert(msg->intm_grp_id >= 0 && msg->intm_grp_id < s->params->num_groups);
-        if(s->group_link_status[msg->intm_grp_id] == 1)
+        if(s->group_link_status_agg[conn.dest_gid % s->params->num_routers] == 1) // depecated? This was checking the load on all ports - not necesary
+        //assert(msg->intm_grp_id >= 0 && msg->intm_grp_id < s->params->num_groups);
+        //if(s->group_link_status[msg->intm_grp_id] == 1)
             return true;
     }
     //if (c_minimality != C_MIN)
@@ -4386,9 +4385,9 @@ void router_dally_init(router_state * r, tw_lp * lp)
     r->group_link_status = (int*)calloc(p->num_groups, sizeof(int));
     for(int i = 0; i < p->num_groups; i++)
         r->group_link_status[i] = -1;
-    //r->group_link_status_agg = (int*)calloc(p->intra_grp_radix, sizeof(int));
-    //for(int i = 0; i < p->intra_grp_radix; i++)
-    //    r->group_link_status_agg[i] = -1;
+    r->group_link_status_agg = (int*)calloc(p->intra_grp_radix, sizeof(int));
+    for(int i = 0; i < p->intra_grp_radix; i++)
+        r->group_link_status_agg[i] = -1;
     r->group_link_update_count = 0;
     r->group_link_status_time = (tw_stime*)calloc(p->num_groups, sizeof(tw_stime));
     r->downstream_credit = (int**)calloc(p->radix , sizeof(int*));
@@ -6322,6 +6321,7 @@ static void router_buf_state_send(router_state * s, terminal_dally_message * msg
     // Copy port states to event message
     // TODO: use more appropriate variable names instead RC-designated variables
     buf_msg->rc_qos_status = (int *) calloc(p->num_global_channels*2, sizeof(int));
+    //buf_msg->rc_is_qos_set = router_cong_state;
 
     int dest_group_id;
     for(int j = 0; j < p->num_global_channels; j++){ // Currently using an awkward layout: 1D array of group_ids followed by link states
@@ -6333,7 +6333,7 @@ static void router_buf_state_send(router_state * s, terminal_dally_message * msg
         
         assert(s->group_link_status[dest_group_id] == -1 || s->group_link_status[dest_group_id] == 1);
     }
-    //buf_msg->rc_is_qos_set = s->group_link_status_agg[local_id]; //s->voq_occupancy_total[j];
+    buf_msg->rc_is_qos_set = s->group_link_status_agg[local_id]; //s->voq_occupancy_total[j];
 
     // Complete preparing and sending event
     buf_msg->magic = router_magic_num;
@@ -6362,6 +6362,7 @@ static void router_buf_notify_update(router_state * s, terminal_dally_message * 
 
     int my_local_id = s->router_id % s->params->num_routers;
     int dest_group_id = -1;
+    int flag_count = 0;
     bool status_changed = false;
 
     tw_stime min_update_window = 2; // Minimum time between make/posting status updates
@@ -6394,6 +6395,7 @@ static void router_buf_notify_update(router_state * s, terminal_dally_message * 
                 status_changed = true;
             }
             assert(s->group_link_status[dest_group_id] == 1);
+            flag_count += 1;
 
         } else if(s->voq_occupancy_total[port] <= p->adaptive_threshold_upper){
             //tw_output(lp,"\n == V:%d | T:%d", s->voq_occupancy_total[port], p->adaptive_threshold_upper);
@@ -6435,7 +6437,9 @@ static void router_buf_notify_update(router_state * s, terminal_dally_message * 
             //if(s->router_id == 1  && tw_now(lp) < 500){
             //    printf("%d(%ld), ", id, router_dest_id);
             //}
-
+            s->group_link_status_agg[my_local_id] = 0;
+            if (flag_count == s->params->num_global_channels)
+                s->group_link_status_agg[my_local_id] = 1;
             router_buf_state_send(s, msg, lp, my_local_id, router_dest_id); // TODO: rename these id variables
         }
     }
@@ -7396,7 +7400,8 @@ static void router_group_buf_update(router_state * s, tw_bf * bf, terminal_dally
         //}
         assert(s->group_link_status[dest_group_id] == -1 || s->group_link_status[dest_group_id] == 1);
     }
-    //s->group_link_status_agg[local_id] = msg->rc_is_qos_set;
+    s->group_link_status_agg[local_id] = msg->rc_is_qos_set;
+    assert(s->group_link_status_agg[local_id] == 0 || s->group_link_status_agg[local_id] == 1);
     //for(int i = p->intra_grp_radix; i < p->intra_grp_radix +  p->num_global_channels; i++){
     //    s->group_link_status[src_id_local][i] = msg->rc_qos_status[i - p->intra_grp_radix];
     
@@ -8066,10 +8071,10 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         nonmin_score = dfdally_apply_advanced_scoring(s, bf, msg, best_nonmin_conn, lp, C_NONMIN, nonmin_score, false, 2);
         
         bool upper_threshold_exceeded = false;
-        if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
-            exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
-            upper_threshold_exceeded = true;
-        }
+        //if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
+        //    exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
+        //    upper_threshold_exceeded = true;
+        //}
 
         /* Debugging code for tracking how routing decisions are made. Added by Kevin Brown on 2021/08 during routing+qos study*/
         #if DEBUG_ROUTING_DECISION == 1
@@ -8100,9 +8105,12 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
         if (min_score <= adaptive_threshold ||
                 min_score <= nonmin_score ||
-                upper_threshold_exceeded)
+                upper_threshold_exceeded) {
+            //printf("\n[%d] going min 2", s->router_id);
             return best_min_conn;
+        }
         else {
+            //printf("\n[%d] going non-min 2", s->router_id);
             return best_nonmin_conn;
         }
 
@@ -8187,6 +8195,8 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         s->route_nonmin_score[vcg]++;
         #endif
         //must pick non-minimal (if we have visited, we can pick minimal then as nonminimal will be an empty vector)
+        // KBEDIT
+       // printf("\n[%d] going non-min 3", s->router_id);
         return best_nonmin_conn;
     }
 
@@ -8215,12 +8225,12 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
             exceed_adaptive_upper_threshold(s, bf, msg, best_nonmin_conn, C_NONMIN, fdest_group_id) == true){ // if buffer are over capacity
             upper_threshold_exceeded = true;
         }
-    } else if (group_code == 1){ // Check in intermediate group
-        if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
-            exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
-            upper_threshold_exceeded = true;
-        }
-    }
+    }// else if (group_code == 1){ // Check in intermediate group
+    //    if (exceed_adaptive_upper_threshold_general(s, bf, msg, best_min_conn, C_MIN) == true &&
+    //        exceed_adaptive_upper_threshold_general(s, bf, msg, best_nonmin_conn, C_NONMIN) == true){
+    //        upper_threshold_exceeded = true;
+    //    }
+    //}
 
     /* Debugging code for tracking how routing decisions are made. Added by Kevin Brown on 2021/08 during routing+qos study*/
     #if DEBUG_ROUTING_DECISION == 1
@@ -8251,10 +8261,13 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
     if (min_score <= adaptive_threshold ||
             min_score <= nonmin_score ||
-            upper_threshold_exceeded)
+            upper_threshold_exceeded) {
+        //printf("\n[%d] going min 4", s->router_id);
         return best_min_conn;
+    }
     else {
         msg->path_type = NON_MINIMAL;
+        //printf("\n[%d] going non-min 4", s->router_id);
         return best_nonmin_conn;
     }
 }
