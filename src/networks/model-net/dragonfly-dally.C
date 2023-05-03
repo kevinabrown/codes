@@ -52,8 +52,8 @@
 #define DEBUG_QOS_T 1
 #define DEBUG_ROUTING_SCORE 0
 #define DEBUG_ROUTING_SCORE_ROUTER1 0
-#define DEBUG_ROUTING_SCORE_ROUTER2 599
-#define DEBUG_ROUTING_DECISION 1
+#define DEBUG_ROUTING_SCORE_ROUTER2 1
+#define DEBUG_ROUTING_DECISION 0
 #define T_ID -1
 #define TRACK -1
 #define TRACK_PKT -1
@@ -5726,7 +5726,8 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     /* We get the exact vcg set on the packet in case num_qos_levels == 0 */
     int vc_group = get_vcg_from_category(msg);
     //if(tw_now(lp) >= 675000 && tw_now(lp) <= 700000)
-    if(tw_now(lp) >= 350000 && tw_now(lp) <= 375000)
+    //if(tw_now(lp) >= 350000 && tw_now(lp) <= 375000)
+    //if(s->terminal_id < 192)
     fprintf(rdfdally_file, "\n%lf %d %d %d %d %d %hi %hi %hi %lf %lf", tw_now(lp), s->terminal_id,
             codes_mapping_get_lp_relative_id(msg->sender_mn_lp,0,0), 
             vc_group, msg->my_g_hop, msg->my_l_hop, msg->nm_sgrp, msg->nm_igrp, msg->nm_dgrp, (tw_now(lp) - msg->travel_start_time),
