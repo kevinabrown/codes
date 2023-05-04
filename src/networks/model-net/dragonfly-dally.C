@@ -644,12 +644,12 @@ struct router_state
     int** qos_red_sent;
 #endif
 #if DEBUG_ROUTING_DECISION == 1
-    int* route_min_score;    // counts when min_score <= non_min score   (threshold not considered)
-    int* route_min_score_only;    // counts when min_score <= non_min score   & score > threshold
-    int* route_lower_threshold;    // counts when min_score <= threshold value (bytes)
-    int* route_upper_threshold_for_min_score;    // counts when upper threshold is exceeded while min score is best
-    int* route_upper_threshold_for_nonmin_score; // counts when upper threshold is exceeded while nonmin score is best
-    int* route_nonmin_score; // counts when threshold < nonmin_score < min_score
+    int** route_min_score;    // counts when min_score <= non_min score   (threshold not considered)
+    int** route_min_score_only;    // counts when min_score <= non_min score   & score > threshold
+    int** route_lower_threshold;    // counts when min_score <= threshold value (bytes)
+    int** route_upper_threshold_for_min_score;    // counts when upper threshold is exceeded while min score is best
+    int** route_upper_threshold_for_nonmin_score; // counts when upper threshold is exceeded while nonmin score is best
+    int** route_nonmin_score; // counts when threshold < nonmin_score < min_score
 #endif
 
     const char * anno;
@@ -3275,22 +3275,24 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
     #endif   
     #if DEBUG_ROUTING_DECISION == 1
     if(dragonfly_rtr_rtg_log != NULL){
-        for(int j = 0; j < num_qos_levels; j++){
-            if(s->route_min_score[j] > 0 || s->route_lower_threshold[j] > 0 || s->route_upper_threshold_for_min_score[j] > 0 || s->route_upper_threshold_for_nonmin_score[j] > 0 || s->route_nonmin_score[j] > 0){
-                fprintf(dragonfly_rtr_rtg_log, "\n %.0f %d %d %d %d %d %d %d %d", tw_now(lp), s->router_id, j, s->route_min_score[j], s->route_min_score_only[j], s->route_lower_threshold[j], s->route_upper_threshold_for_min_score[j], s->route_upper_threshold_for_nonmin_score[j], s->route_nonmin_score[j]);
+        for(int i = 0; i < radix; i++)
+            for(int j = 0; j < num_qos_levels; j++){
+                if(s->route_min_score[i][j] > 0 || s->route_lower_threshold[i][j] > 0 || s->route_upper_threshold_for_min_score[i][j] > 0 || s->route_upper_threshold_for_nonmin_score[i][j] > 0 || s->route_nonmin_score[i][j] > 0){
+                    fprintf(dragonfly_rtr_rtg_log, "\n %.0f %d %d %d %d %d %d %d %d %d", tw_now(lp), s->router_id, i, j, s->route_min_score[i][j], s->route_min_score_only[i][j], s->route_lower_threshold[i][j], s->route_upper_threshold_for_min_score[i][j], s->route_upper_threshold_for_nonmin_score[i][j], s->route_nonmin_score[i][j]);
 
-                // This is repeated for each qos level for a given switch. It should be elsewhere
-                fprintf(dragonfly_rtr_rtg_log, " %d", s->group_link_update_count);
-                s->group_link_update_count = 0;
+                    // This is repeated for each qos level for a given switch. It should be elsewhere //KBEDIT
+                    fprintf(dragonfly_rtr_rtg_log, " %d", s->group_link_update_count);
+                    s->group_link_update_count = 0;
 
-                s->route_min_score[j] = 0;
-                s->route_min_score_only[j] = 0;
-                s->route_lower_threshold[j] = 0;
-                s->route_upper_threshold_for_min_score[j] = 0;
-                s->route_upper_threshold_for_nonmin_score[j] = 0;
-                s->route_nonmin_score[j] = 0;
+                    s->route_min_score[i][j] = 0;
+                    s->route_min_score_only[i][j] = 0;
+                    s->route_lower_threshold[i][j] = 0;
+                    s->route_upper_threshold_for_min_score[i][j] = 0;
+                    s->route_upper_threshold_for_nonmin_score[i][j] = 0;
+                    s->route_nonmin_score[i][j] = 0;
+                }
             }
-        }
+    }
     }
     #endif
 
@@ -4365,7 +4367,7 @@ void router_dally_init(router_state * r, tw_lp * lp)
     if(dragonfly_rtr_rtg_log == NULL)
     {
         dragonfly_rtr_rtg_log = fopen(rtr_rtg_log, "w+");
-        fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold-for-min-score by-upper-threshold-for-nonmin-score by-nonmin-score group-link-updates");
+        fprintf(dragonfly_rtr_rtg_log, "\n time-stamp router-id port-id qos-level by-min-score by-min-score-only by-lower-threshold by-upper-threshold-for-min-score by-upper-threshold-for-nonmin-score by-nonmin-score group-link-updates");
     }
     #endif
     #if DEBUG_ROUTING_SCORE == 1
@@ -4483,19 +4485,28 @@ void router_dally_init(router_state * r, tw_lp * lp)
     rc_stack_create(&r->cc_st);
 
 #if DEBUG_ROUTING_DECISION == 1
-    r->route_min_score = (int*)calloc(num_qos_levels, sizeof(int));
-    r->route_min_score_only = (int*)calloc(num_qos_levels, sizeof(int));
-    r->route_lower_threshold = (int*)calloc(num_qos_levels, sizeof(int));
-    r->route_upper_threshold_for_min_score = (int*)calloc(num_qos_levels, sizeof(int));
-    r->route_upper_threshold_for_nonmin_score = (int*)calloc(num_qos_levels, sizeof(int));
-    r->route_nonmin_score = (int*)calloc(num_qos_levels, sizeof(int));
-    for(int j = 0; j < num_qos_levels; j++){
-        r->route_min_score[j] = 0;
-        r->route_min_score_only[j] = 0;
-        r->route_lower_threshold[j] = 0;
-        r->route_upper_threshold_for_min_score[j] = 0;
-        r->route_upper_threshold_for_nonmin_score[j] = 0;
-        r->route_nonmin_score[j] = 0;
+    r->route_min_score = (int**)calloc(p->radix, sizeof(int*));
+    r->route_min_score_only = (int**)calloc(p->radix, sizeof(int*));
+    r->route_lower_threshold = (int**)calloc(p->radix, sizeof(int*));
+    r->route_upper_threshold_for_min_score = (int**)calloc(p->radix, sizeof(int*));
+    r->route_upper_threshold_for_nonmin_score = (int**)calloc(p->radix, sizeof(int*));
+    r->route_nonmin_score = (int**)calloc(p->radix, sizeof(int*));
+    for(int i=0; i < p->radix; i++)
+    {
+        r->route_min_score[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->route_min_score_only[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->route_lower_threshold[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->route_upper_threshold_for_min_score[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->route_upper_threshold_for_nonmin_score[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->route_nonmin_score[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        for(int j = 0; j < num_qos_levels; j++){
+            r->route_min_score[i][j] = 0;
+            r->route_min_score_only[i][j] = 0;
+            r->route_lower_threshold[i][j] = 0;
+            r->route_upper_threshold_for_min_score[i][j] = 0;
+            r->route_upper_threshold_for_nonmin_score[i][j] = 0;
+            r->route_nonmin_score[i][j] = 0;
+        }
     }
 #endif
 
@@ -8365,20 +8376,20 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
         if (upper_threshold_exceeded){ // log decision due to upper threshold
             if (min_score <= nonmin_score) {
-                s->route_upper_threshold_for_min_score[vcg]++;
+                s->route_upper_threshold_for_min_score[best_min_conn.port][vcg]++;
             } else {
-                s->route_upper_threshold_for_nonmin_score[vcg]++;
+                s->route_upper_threshold_for_nonmin_score[best_min_conn.port][vcg]++;
             }
         } else { // log decision due to scores or lower threshold
             if (min_score <= nonmin_score) {
-                s->route_min_score[vcg]++;
+                s->route_min_score[best_min_conn.port][vcg]++;
                 if (min_score > adaptive_threshold && !upper_threshold_exceeded)
-                    s->route_min_score_only[vcg]++;
+                    s->route_min_score_only[best_min_conn.port][vcg]++;
             } else {
                 if (min_score <= adaptive_threshold){
-                    s->route_lower_threshold[vcg]++;
+                    s->route_lower_threshold[best_min_conn.port][vcg]++;
                 } else {
-                        s->route_nonmin_score[vcg]++;
+                        s->route_nonmin_score[best_nonmin_conn.port][vcg]++;
                 }
             }
         }
@@ -8474,7 +8485,7 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
         int vcg = 0;
         if (s->params->num_qos_levels > 1)
             vcg = get_vcg_from_category(msg);
-        s->route_nonmin_score[vcg]++;
+        s->route_nonmin_score[best_nonmin_conn.port][vcg]++;
         #endif
         //must pick non-minimal (if we have visited, we can pick minimal then as nonminimal will be an empty vector)
         // KBEDIT
@@ -8522,20 +8533,20 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
     if (upper_threshold_exceeded){ // log decision due to upper threshold
         if (min_score <= nonmin_score) {
-            s->route_upper_threshold_for_min_score[vcg]++;
+            s->route_upper_threshold_for_min_score[best_min_conn.port][vcg]++;
         } else {
-            s->route_upper_threshold_for_nonmin_score[vcg]++;
+            s->route_upper_threshold_for_nonmin_score[best_min_conn.port][vcg]++;
         }
     } else { // log decision due to scores or lower threshold
         if (min_score <= nonmin_score) {
-            s->route_min_score[vcg]++;
+            s->route_min_score[best_min_conn.port][vcg]++;
             if (min_score > adaptive_threshold && !upper_threshold_exceeded)
-                s->route_min_score_only[vcg]++;
+                s->route_min_score_only[best_min_conn.port][vcg]++;
         } else {
             if (min_score <= adaptive_threshold){
-                s->route_lower_threshold[vcg]++;
+                s->route_lower_threshold[best_min_conn.port][vcg]++;
             } else {
-                    s->route_nonmin_score[vcg]++;
+                    s->route_nonmin_score[best_nonmin_conn.port][vcg]++;
             }
         }
     }
