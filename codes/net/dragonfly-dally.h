@@ -73,6 +73,10 @@ struct terminal_dally_message
   short is_intm_visited;
   int intm_rtr_id;
   int intm_grp_id;
+  int ugal_intm_grp_id;
+  int ugalp_intm_grp_id;
+  int grp_exit_router_id;
+  int grp_exit_port_id;
   int saved_src_dest;
   int saved_src_chan;
 
