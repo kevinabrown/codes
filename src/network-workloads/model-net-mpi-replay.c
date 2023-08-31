@@ -197,7 +197,7 @@ enum TRAFFIC
     STENCIL = 4, /* sends message to 4 nearby neighbors */
     PERMUTATION = 5,
     BISECTION = 6,
-    NEXT_GROUP_8320NODES = 7,
+    NEXT_GROUP_8NODES = 7,
     UNIFORM_GLOBAL_8320NODES = 8,
     UNIFORM_SPREAD = 9
 };
@@ -970,15 +970,15 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
             dest_svr[3] = ((row+1+x)%x) * y + col;   /* up neighbor */
         }
         break;
-        case NEXT_GROUP_8320NODES:
+        case NEXT_GROUP_8NODES:
         {
-	    /* Special case next-group pattern on 8320-node system
-	     * (128 nodes per group)
+	    /* Special case next-group pattern on 72-node system
+	     * (8 nodes per group)
 	     * */
-            assert(num_clients == 8320);
+            assert(num_clients == 72);
             length = 1;
             dest_svr = (int*) calloc(1, sizeof(int));
-	        dest_svr[0] = (s->local_rank + 128) % num_clients;
+	        dest_svr[0] = (s->local_rank + 8) % num_clients;
         }
         break;
         case UNIFORM_GLOBAL_8320NODES:
