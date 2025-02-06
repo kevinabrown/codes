@@ -5946,14 +5946,14 @@ dragonfly_dally_terminal_final( terminal_state * s,
   
     if(s->terminal_id == 0)
     {
-        written += sprintf(s->output_buf + written, "# Format <source_id> <port_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation> <stalled_chunks>\n");
+        written += sprintf(s->output_buf + written, "# Format <source_id> <src_port_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation> <stalled_chunks>\n");
 //        fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Avg hops> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
     }
     for(int i = 0; i < s->params->num_rails; i++)
     {
         //since LLU(s->total_msg_size) is total message size a terminal received from a router so source is router and destination is terminal
         written += sprintf(s->output_buf + written, "\n%u %d %s %u %s %s %llu %lf %lu",
-                        s->terminal_id, i, "T",s->router_id[i], "R","CN", LLU(s->link_traffic[i]), s->busy_time[i], s->stalled_chunks[i]);
+                        s->terminal_id, i, "T", s->router_id[i], "R","CN", LLU(s->link_traffic[i]), s->busy_time[i], s->stalled_chunks[i]);
     }
 
 
