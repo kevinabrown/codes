@@ -3766,41 +3766,38 @@ static int token_get_next_router_vcg(router_state * s, tw_bf * bf, terminal_dall
     }
 
     /* All vcgs are exceeding their bandwidth limits*/
-    msg->last_saved_qos = s->last_qos_lvl[output_port];
-    int next_rr_vcg = (s->last_qos_lvl[output_port] + 1) % num_qos_levels;
+    msg->last_saved_qos = s->last_qos_lvl[output_port]; // Stores VC#, not QoS class#
+    int next_rr_vc = (s->last_qos_lvl[output_port] + 1) % s->params->num_vcs;
 
-    for(int i = 0; i < num_qos_levels; i++)
+    for(int i = 0; i < s->params->num_vcs; i++)
     {
-        base_limit = next_rr_vcg * vcs_per_qos; 
-        for(int k = base_limit; k < base_limit + vcs_per_qos; k++)
+        #if DEBUG_QOS_X == 1
+        printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (checked)\n", tw_now(lp), 
+                s->router_id, output_port, next_rr_vc/vcs_per_qos, next_rr_vc);
+        #endif
+        if(s->pending_msgs[output_port][next_rr_vc] != NULL)
         {
             #if DEBUG_QOS_X == 1
-            printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (checked)\n", tw_now(lp), 
-                    s->router_id, output_port, next_rr_vcg, k);
+            printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (has data)\n", tw_now(lp), 
+                    s->router_id, output_port, next_rr_vc/vcs_per_qos, next_rr_vc);
             #endif
-            if(s->pending_msgs[output_port][k] != NULL)
+
+            if(router_downstream_credit_available(s, output_port, next_rr_vc, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
             {
-                if(router_downstream_credit_available(s, output_port, k, chunk_size)) // KBEdit: This will block sending for chunks small than chunk_size in some cases
-                {
-                    #if DEBUG_QOS_X == 1
-                    printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (sent-RED)\n", tw_now(lp), 
-                            s->router_id, output_port, next_rr_vcg, k);
-                    #endif
+                #if DEBUG_QOS_X == 1
+                printf("[%.0lf] qos_send_excess router:%d port:%d class:%d vc:%d (sent-RED)\n", tw_now(lp), 
+                        s->router_id, output_port, next_rr_vc/vcs_per_qos, next_rr_vc);
+                #endif
 
-                    #if DEBUG_QOS == 1 
-                    s->qos_red_sent[output_port][next_rr_vcg]++;
-                    #endif
+                #if DEBUG_QOS == 1 
+                s->qos_red_sent[output_port][next_rr_vc]++;
+                #endif
 
-                    if(msg->last_saved_qos < 0)
-                        msg->last_saved_qos = s->last_qos_lvl[output_port];  // Is this correct for RC KBEDIT
-
-                    s->last_qos_lvl[output_port] = next_rr_vcg;
-                    return k;
-                }
+                s->last_qos_lvl[output_port] = next_rr_vc;
+                return next_rr_vc;
             }
         }
-        next_rr_vcg = (next_rr_vcg + 1) % num_qos_levels;
-        assert(next_rr_vcg < num_qos_levels);
+        next_rr_vc = (next_rr_vc + 1) % s->params->num_vcs;
     }
     #if DEBUG_QOS_X == 1
     printf("[%.0lf] qos_send_excess router:%d port:%d ----  (no data to send)\n", tw_now(lp), 
@@ -7057,6 +7054,8 @@ static void router_packet_send_rc(router_state * s, tw_bf * bf, terminal_dally_m
         return;  
     }
 
+    s->last_qos_lvl[output_port] = msg->last_saved_qos;
+
     int output_chan = msg->saved_channel;
     if(bf->c8)
     {
@@ -7319,6 +7318,7 @@ static void router_packet_send( router_state * s, tw_bf * bf, terminal_dally_mes
     s->voq_occupancy[output_port][output_chan] -= msg_size;
     s->voq_occupancy_total[output_port] -= msg_size;
     assert(s->voq_occupancy_total[output_port] >= 0);
+
     if(s->voq_occupancy_total[output_port] <= 0){
         s->qos_green_total[output_port][0]++;
     }
