@@ -6926,6 +6926,8 @@ static void router_packet_receive( router_state * s,
 
     int msg_size = s->params->chunk_size;
     uint64_t num_chunks = cur_chunk->msg.packet_size / s->params->chunk_size;
+    if(cur_chunk->msg.packet_size < s->params->chunk_size)
+        num_chunks++;
     if((cur_chunk->msg.packet_size % s->params->chunk_size) && (cur_chunk->msg.chunk_id == num_chunks - 1)) {
         //bf->c11 = 1;  /KBedit From router_packet_send
         msg_size = cur_chunk->msg.packet_size % s->params->chunk_size;
