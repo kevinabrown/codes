@@ -48,7 +48,7 @@
 #define DEBUG_LP 892
 #define DEBUG_QOS 1
 #define DEBUG_QOS_X 0
-#define DEBUG_QOS_R 1
+#define DEBUG_QOS_R 0
 #define DEBUG_QOS_T 1
 #define DEBUG_ROUTING_SCORE 0
 #define SCORED_ROUTER(x) (x >= 0)
@@ -68,7 +68,7 @@
 
 #define OUTPUT_END_END_LATENCIES 0
 #define OUTPUT_PORT_PORT_LATENCIES 0
-#define OUTPUT_LATENCY_MODULO 1
+#define OUTPUT_LATENCY_MODULO 0
 
 #define ADD_NOISE 0
 
@@ -3150,7 +3150,7 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
 
             // time-stamp %d qos-level %lf avg-chunk-latency %lf max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks bw-consumed downstream-credits
 	        //if(s->period_max_latency[i] > 0)
-                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf %.0lf", tw_now(lp)/1000.0, s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i], bw_consumed);
+                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf %.0lf", tw_now(lp), s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i], bw_consumed);
 
             s->period_total_time[i] = 0;
             s->period_finished_chunks[i] = 0;
