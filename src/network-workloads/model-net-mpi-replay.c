@@ -191,6 +191,7 @@ enum MPI_NW_EVENTS
 /* type of synthetic traffic */
 enum TRAFFIC
 {
+    POINT_TO_POINT = 0, /* send message from a single source to a single destination */
     UNIFORM = 1, /* sends message to a randomly selected node */
     NEAREST_NEIGHBOR = 2, /* sends message to the next node (potentially connected to the same router) */
     ALLTOALL = 3, /* sends message to all other nodes */
@@ -873,6 +874,17 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
     int i, length=0;
     switch(s->synthetic_pattern)
     {
+        case POINT_TO_POINT:
+        {
+            if(s->local_rank != 0)
+                return;
+
+            length = 1;
+            dest_svr = (int*) calloc(1, sizeof(int));
+            dest_svr[0] = 1;
+        }
+        break;
+
         case UNIFORM:
         {
             bf->c1 = 1;
@@ -2518,7 +2530,7 @@ void nw_test_init(nw_state* s, tw_lp* lp)
    if(strncmp(file_name_of_job[lid.job], "synthetic", 9) == 0)
    {
         sscanf(file_name_of_job[lid.job], "synthetic%d", &synthetic_pattern);
-        if(synthetic_pattern <=0 || synthetic_pattern > 9)
+        if(synthetic_pattern <0 || synthetic_pattern > 9)
         {
             printf("\n Undefined synthetic pattern: setting to uniform random ");
             s->synthetic_pattern = 1;
