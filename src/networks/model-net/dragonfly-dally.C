@@ -48,7 +48,7 @@
 #define DEBUG_LP 892
 #define DEBUG_QOS 1
 #define DEBUG_QOS_X 0
-#define DEBUG_QOS_R 1
+#define DEBUG_QOS_R 0
 #define DEBUG_QOS_T 1
 #define DEBUG_ROUTING_SCORE 0
 #define SCORED_ROUTER(x) (x >= 0)
@@ -68,7 +68,7 @@
 
 #define OUTPUT_END_END_LATENCIES 0
 #define OUTPUT_PORT_PORT_LATENCIES 0
-#define OUTPUT_LATENCY_MODULO 1
+#define OUTPUT_LATENCY_MODULO 0
 
 #define ADD_NOISE 0
 
@@ -2404,7 +2404,7 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
         p->max_hops_notify = INT_MAX;
     }
 
-    p->num_vcs = 4;
+    p->num_vcs = 1;
     
     if(p->num_qos_levels > 1)
         p->num_vcs = p->num_qos_levels * p->num_vcs;
@@ -3150,7 +3150,7 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
 
             // time-stamp %d qos-level %lf avg-chunk-latency %lf max-chunk-latency avg-hops min-routed-chunks nonmin-routed-chunks bw-consumed downstream-credits
 	        //if(s->period_max_latency[i] > 0)
-                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf %.0lf", tw_now(lp)/1000.0, s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i], bw_consumed);
+                fprintf(dragonfly_term_pk_log, "\n %.0f %d %d %.0lf %.0lf %.0lf %.0lf", tw_now(lp), s->terminal_id, i, s->period_total_time[i]/s->period_finished_chunks[i], s->period_min_latency[i], s->period_max_latency[i], bw_consumed);
 
             s->period_total_time[i] = 0;
             s->period_finished_chunks[i] = 0;
@@ -6714,6 +6714,9 @@ static void router_packet_receive( router_state * s,
     output_chan = cur_chunk->msg.output_chan;
 
     // calulate downstream VC -  KBEdit: this should be a part of routing or a separte flow control component
+    int downstream_chan = 0;
+    /* KBEdit -- the following was removed for WinterSim2025 flow paper
+     *           where num_vc=1 for all ports
     int downstream_chan = output_chan - (vcg * vcs_per_qos);
     if(next_stop_conn.conn_type == CONN_TERMINAL) // KBEdit: we should test for being on the destination router elsewhere? Should I test for being on the source router?
     { // We are on the destination router; Assuming there is 1 vc buffer per qos class on terminal interfaces
@@ -6754,6 +6757,8 @@ static void router_packet_receive( router_state * s,
         downstream_chan = downstream_chan + (vcg * vcs_per_qos);
         assert(downstream_chan < s->params->num_vcs && downstream_chan >= 0);
     }
+    End of WinterSim2025 edit*/
+
     /* KBEdit: remove since the local channel is determined before arrive on this router
     int prev_output_channel = cur_chunk->msg.output_chan - (vcg * vcs_per_qos); 
 
